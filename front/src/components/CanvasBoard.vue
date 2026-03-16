@@ -221,9 +221,12 @@ function getRelativePoint(event: PointerEvent) {
     return { x: 0, y: 0 };
   }
 
+  const scaleX = WIDTH / rect.width;
+  const scaleY = HEIGHT / rect.height;
+
   return {
-    x: Math.max(0, Math.min(WIDTH, event.clientX - rect.left)),
-    y: Math.max(0, Math.min(HEIGHT, event.clientY - rect.top)),
+    x: Math.max(0, Math.min(WIDTH, (event.clientX - rect.left) * scaleX)),
+    y: Math.max(0, Math.min(HEIGHT, (event.clientY - rect.top) * scaleY)),
   };
 }
 

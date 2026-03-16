@@ -94,6 +94,42 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  @SubscribeMessage('dice:roll')
+  async rollDice(
+    @ConnectedSocket() client: RoomSocket,
+    @MessageBody() body: { diceType: string; count?: number },
+  ) {
+    const roomSlug = client.data.roomSlug;
+    const sessionId = client.data.sessionId;
+
+    if (!roomSlug || !sessionId) {
+      return;
+    }
+
+    try {
+      const { session } = await this.roomsService.validateSession(
+        sessionId,
+        roomSlug,
+      );
+      const count = Math.max(1, Math.min(20, Number(body.count) || 1));
+      const diceType =
+        typeof body.diceType === 'string' && body.diceType
+          ? body.diceType.toLowerCase().trim()
+          : 'd6';
+
+      const log = await this.roomsService.addDiceRoll(
+        roomSlug,
+        session.participant,
+        diceType,
+        count,
+      );
+
+      this.server.to(roomSlug).emit('dice_log_added', { log });
+    } catch {
+      // session invalid — ignore
+    }
+  }
+
   private readHandshakeValue(client: Socket, key: 'roomSlug' | 'sessionId') {
     const value = client.handshake.auth[key] ?? client.handshake.query[key];
 

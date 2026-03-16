@@ -46,6 +46,17 @@ export type RoomCanvas = {
   tokens: Token[];
 };
 
+export type DiceRollLog = {
+  id: string;
+  participantId: string;
+  participantDisplayName: string;
+  diceType: string;
+  count: number;
+  results: number[];
+  total: number;
+  createdAt: string;
+};
+
 export type Room = {
   id: string;
   slug: string;
@@ -53,6 +64,7 @@ export type Room = {
   createdAt: string;
   createdBy: Participant;
   canvas: RoomCanvas;
+  diceLogs?: DiceRollLog[];
 };
 
 export type JoinRoomResponse = {

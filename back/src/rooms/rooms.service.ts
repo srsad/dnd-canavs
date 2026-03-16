@@ -8,6 +8,7 @@ import { FileStoreService } from '../storage/file-store.service';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import {
   CanvasToken,
+  DiceRollLog,
   RoomCanvasState,
   RoomParticipant,
   RoomRecord,
@@ -37,6 +38,7 @@ export class RoomsService {
       createdAt: new Date().toISOString(),
       createdBy: creator,
       canvas: this.createDefaultCanvas(),
+      diceLogs: [],
     };
 
     rooms.push(room);
@@ -149,7 +151,61 @@ export class RoomsService {
       createdAt: room.createdAt,
       createdBy: room.createdBy,
       canvas: room.canvas,
+      diceLogs: room.diceLogs ?? [],
     };
+  }
+
+  async addDiceRoll(
+    roomSlug: string,
+    participant: RoomParticipant,
+    diceType: string,
+    count: number,
+  ): Promise<DiceRollLog> {
+    const rooms = await this.readAll();
+    const room = rooms.find((r) => r.slug === roomSlug);
+
+    if (!room) {
+      throw new NotFoundException('Room not found.');
+    }
+
+    const sides = this.parseDiceSides(diceType);
+    const results: number[] = [];
+
+    for (let i = 0; i < count; i++) {
+      results.push(Math.floor(Math.random() * sides) + 1);
+    }
+
+    const total = results.reduce((a, b) => a + b, 0);
+
+    const log: DiceRollLog = {
+      id: randomUUID(),
+      participantId: participant.id,
+      participantDisplayName: participant.displayName,
+      diceType,
+      count,
+      results,
+      total,
+      createdAt: new Date().toISOString(),
+    };
+
+    if (!room.diceLogs) {
+      room.diceLogs = [];
+    }
+    room.diceLogs.push(log);
+    await this.fileStore.writeJson(this.fileName, rooms);
+
+    return log;
+  }
+
+  private parseDiceSides(diceType: string): number {
+    const match = diceType.match(/^d(\d+)$/i);
+    if (match) {
+      const sides = parseInt(match[1], 10);
+      if (sides >= 2 && sides <= 1000) {
+        return sides;
+      }
+    }
+    return 6;
   }
 
   private resolveParticipant(

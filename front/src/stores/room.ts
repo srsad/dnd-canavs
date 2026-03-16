@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import { apiRequest } from '../lib/api';
 import { createRoomSocket } from '../lib/socket';
 import type {
+  DiceRollLog,
   JoinRoomResponse,
   Participant,
   Room,
@@ -116,6 +117,15 @@ export const useRoomStore = defineStore('room', () => {
       participants.value = payload.participants;
     });
 
+    nextSocket.on('dice_log_added', (payload: { log: DiceRollLog }) => {
+      if (!room.value) return;
+      const logs = room.value.diceLogs ?? [];
+      room.value = {
+        ...room.value,
+        diceLogs: [...logs, payload.log],
+      };
+    });
+
     nextSocket.on('presence_updated', (payload: { participants: Participant[] }) => {
       participants.value = payload.participants;
     });
@@ -136,6 +146,10 @@ export const useRoomStore = defineStore('room', () => {
     });
 
     socket.value = nextSocket;
+  }
+
+  function rollDice(diceType: string, count = 1) {
+    socket.value?.emit('dice:roll', { diceType, count });
   }
 
   function replaceCanvas(canvas: RoomCanvas) {
@@ -187,6 +201,7 @@ export const useRoomStore = defineStore('room', () => {
     participants,
     replaceCanvas,
     reset,
+    rollDice,
     room,
     sessionId,
     syncing,

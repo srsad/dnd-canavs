@@ -34,6 +34,17 @@ export type RoomCanvasState = {
   tokens: CanvasToken[];
 };
 
+export type DiceRollLog = {
+  id: string;
+  participantId: string;
+  participantDisplayName: string;
+  diceType: string; // e.g. "d6", "d20"
+  count: number;
+  results: number[];
+  total: number;
+  createdAt: string;
+};
+
 export type RoomRecord = {
   id: string;
   slug: string;
@@ -41,6 +52,7 @@ export type RoomRecord = {
   createdAt: string;
   createdBy: RoomParticipant;
   canvas: RoomCanvasState;
+  diceLogs: DiceRollLog[];
 };
 
 export type RoomSession = {

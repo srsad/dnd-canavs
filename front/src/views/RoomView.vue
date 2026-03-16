@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CanvasBoard from '../components/CanvasBoard.vue';
+import DiceLogPanel from '../components/DiceLogPanel.vue';
+import DiceRoller from '../components/DiceRoller.vue';
 import ParticipantsPanel from '../components/ParticipantsPanel.vue';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
@@ -138,6 +140,10 @@ async function copyLink() {
           :participants="roomStore.participants"
           :current-participant-id="roomStore.currentParticipant?.id"
         />
+
+        <DiceRoller />
+
+        <DiceLogPanel :logs="(roomStore.room?.diceLogs ?? [])" />
 
         <section class="panel">
           <p class="eyebrow">Состояние</p>
