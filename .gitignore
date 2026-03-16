@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.env
+*.local
+back/node_modules/
+front/node_modules/
+back/dist/
+front/dist/

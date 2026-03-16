@@ -1,0 +1,11 @@
+{
+  "name": "dnd-canvas",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev:back": "npm --prefix back run start:dev",
+    "dev:front": "npm --prefix front run dev",
+    "build": "npm --prefix back run build && npm --prefix front run build",
+    "test:back": "npm --prefix back run test"
+  }
+}
