@@ -14,12 +14,21 @@ const emit = defineEmits<{
 const WIDTH = 960;
 const HEIGHT = 600;
 
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.15;
+
 const boardRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const localCanvas = ref<RoomCanvas>(cloneCanvas(props.modelValue));
 const brushColor = ref('#111827');
 const brushWidth = ref(4);
 
+const pan = ref({ x: 0, y: 0 });
+const zoom = ref(1);
+
+let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
+let isPanning = false;
 let activeStroke: Stroke | null = null;
 let activeTokenId: string | null = null;
 
@@ -68,7 +77,7 @@ function addToken() {
 }
 
 function startDrawing(event: PointerEvent) {
-  if (activeTokenId) {
+  if (activeTokenId || isPanning) {
     return;
   }
 
@@ -116,12 +125,109 @@ function finishDrawing() {
   activeStroke = null;
 }
 
+function startPointerDown(event: PointerEvent) {
+  if (event.button === 1 || event.button === 2) {
+    event.preventDefault();
+    isPanning = true;
+    panStart = {
+      x: event.clientX,
+      y: event.clientY,
+      panX: pan.value.x,
+      panY: pan.value.y,
+    };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+}
+
+function handlePointerUp(event: PointerEvent) {
+  if (event.button === 1 || event.button === 2) {
+    isPanning = false;
+    (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+  }
+  finishInteraction();
+}
+
+function handlePanMove(event: PointerEvent) {
+  if (isPanning) {
+    pan.value = {
+      x: panStart.panX + event.clientX - panStart.x,
+      y: panStart.panY + event.clientY - panStart.y,
+    };
+    return true;
+  }
+  return false;
+}
+
+function handleWheel(event: WheelEvent) {
+  event.preventDefault();
+  const rect = boardRef.value?.getBoundingClientRect();
+  if (!rect) return;
+
+  const viewX = event.clientX - rect.left;
+  const viewY = event.clientY - rect.top;
+  const contentX = (viewX - pan.value.x) / zoom.value;
+  const contentY = (viewY - pan.value.y) / zoom.value;
+
+  const delta = event.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+  const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom.value + delta));
+
+  pan.value = {
+    x: viewX - contentX * newZoom,
+    y: viewY - contentY * newZoom,
+  };
+  zoom.value = newZoom;
+}
+
+function zoomIn() {
+  const rect = boardRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  const viewX = rect.width / 2;
+  const viewY = rect.height / 2;
+  const contentX = (viewX - pan.value.x) / zoom.value;
+  const contentY = (viewY - pan.value.y) / zoom.value;
+  const newZoom = Math.min(MAX_ZOOM, zoom.value + ZOOM_STEP);
+  pan.value = {
+    x: viewX - contentX * newZoom,
+    y: viewY - contentY * newZoom,
+  };
+  zoom.value = newZoom;
+}
+
+function zoomOut() {
+  const rect = boardRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  const viewX = rect.width / 2;
+  const viewY = rect.height / 2;
+  const contentX = (viewX - pan.value.x) / zoom.value;
+  const contentY = (viewY - pan.value.y) / zoom.value;
+  const newZoom = Math.max(MIN_ZOOM, zoom.value - ZOOM_STEP);
+  pan.value = {
+    x: viewX - contentX * newZoom,
+    y: viewY - contentY * newZoom,
+  };
+  zoom.value = newZoom;
+}
+
+function resetView() {
+  pan.value = { x: 0, y: 0 };
+  zoom.value = 1;
+}
+
 function startTokenDrag(tokenId: string, event: PointerEvent) {
   event.stopPropagation();
   activeTokenId = tokenId;
 }
 
+function handlePointerDown(event: PointerEvent) {
+  if (event.button === 1 || event.button === 2) {
+    startPointerDown(event);
+  } else if (event.button === 0 && !activeTokenId) {
+    startDrawing(event);
+  }
+}
+
 function handlePointerMove(event: PointerEvent) {
+  if (handlePanMove(event)) return;
   if (activeTokenId) {
     const point = getRelativePoint(event);
 
@@ -221,12 +327,14 @@ function getRelativePoint(event: PointerEvent) {
     return { x: 0, y: 0 };
   }
 
-  const scaleX = WIDTH / rect.width;
-  const scaleY = HEIGHT / rect.height;
+  const viewX = event.clientX - rect.left;
+  const viewY = event.clientY - rect.top;
+  const contentX = (viewX - pan.value.x) / zoom.value;
+  const contentY = (viewY - pan.value.y) / zoom.value;
 
   return {
-    x: Math.max(0, Math.min(WIDTH, (event.clientX - rect.left) * scaleX)),
-    y: Math.max(0, Math.min(HEIGHT, (event.clientY - rect.top) * scaleY)),
+    x: Math.max(0, Math.min(WIDTH, contentX)),
+    y: Math.max(0, Math.min(HEIGHT, contentY)),
   };
 }
 
@@ -241,6 +349,13 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
     tokens: value.tokens.map((token) => ({ ...token })),
   };
 }
+
+const viewportStyle = computed(() => ({
+  transform: `translate(${pan.value.x}px, ${pan.value.y}px) scale(${zoom.value})`,
+  transformOrigin: '0 0',
+  width: `${WIDTH}px`,
+  height: `${HEIGHT}px`,
+}));
 
 const tokenStyle = computed(() =>
   localCanvas.value.tokens.map((token) => ({
@@ -276,6 +391,12 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="toolbar-group">
+        <div class="zoom-controls">
+          <button class="ghost-button zoom-btn" type="button" title="Приблизить" @click="zoomIn">+</button>
+          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
+          <button class="ghost-button zoom-btn" type="button" title="Отдалить" @click="zoomOut">−</button>
+          <button class="ghost-button zoom-btn" type="button" title="Сбросить вид" @click="resetView">⟲</button>
+        </div>
         <button class="ghost-button" type="button" @click="toggleGrid">
           {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
         </button>
@@ -287,23 +408,28 @@ onBeforeUnmount(() => {
     <div
       ref="boardRef"
       class="board-surface"
-      @pointerdown="startDrawing"
+      title="Колёсико: zoom • Средняя/ПКМ: перетаскивание"
+      @pointerdown="handlePointerDown"
       @pointermove="handlePointerMove"
-      @pointerup="finishInteraction"
-      @pointerleave="finishInteraction"
+      @pointerup="handlePointerUp"
+      @pointerleave="handlePointerUp"
+      @wheel.prevent="handleWheel"
+      @contextmenu.prevent
     >
-      <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="battle-canvas" />
+      <div class="board-viewport" :style="viewportStyle">
+        <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="battle-canvas" />
 
-      <button
-        v-for="token in tokenStyle"
-        :key="token.id"
-        class="token-chip"
-        :style="token.style"
-        type="button"
-        @pointerdown="startTokenDrag(token.id, $event)"
-      >
-        {{ token.label }}
-      </button>
+        <button
+          v-for="token in tokenStyle"
+          :key="token.id"
+          class="token-chip"
+          :style="token.style"
+          type="button"
+          @pointerdown="startTokenDrag(token.id, $event)"
+        >
+          {{ token.label }}
+        </button>
+      </div>
     </div>
   </section>
 </template>

@@ -64,9 +64,17 @@ code {
   padding: 32px 0 48px;
 }
 
+.page-shell.room-page {
+  width: 100%;
+  max-width: none;
+  padding: 16px 20px 24px;
+}
+
 .room-page {
   display: grid;
-  gap: 24px;
+  gap: 20px;
+  grid-template-rows: auto 1fr;
+  min-height: calc(100vh - 60px);
 }
 
 .hero-panel,
@@ -92,26 +100,37 @@ code {
   gap: 24px;
 }
 
+.connection-layout {
+  align-self: start;
+}
+
 .two-column-grid,
 .connection-layout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .board-layout {
-  grid-template-columns: minmax(0, 1fr) 320px;
-  align-items: start;
+  grid-template-columns: 1fr minmax(260px, 300px);
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
 }
 
 .room-sidebar {
   display: grid;
-  gap: 24px;
+  gap: 16px;
+  overflow-y: auto;
+  max-height: 100%;
+  align-content: start;
 }
 
 .room-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 24px;
+  gap: 16px;
+  flex-shrink: 0;
+  padding: 16px 20px;
 }
 
 .eyebrow {
@@ -276,14 +295,19 @@ h2 {
 
 .board-panel {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
 }
 
 .board-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
   flex-wrap: wrap;
 }
 
@@ -297,13 +321,45 @@ h2 {
 .board-surface {
   position: relative;
   width: 100%;
-  max-width: 960px;
-  aspect-ratio: 16 / 10;
+  flex: 1;
+  min-height: 420px;
   border-radius: 20px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.24);
   user-select: none;
   touch-action: none;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  cursor: crosshair;
+}
+
+.board-viewport {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.board-viewport .token-chip {
+  cursor: grab;
+}
+
+.zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.zoom-controls .zoom-btn {
+  padding: 0.4rem 0.6rem;
+  min-width: 32px;
+}
+
+.zoom-value {
+  min-width: 48px;
+  text-align: center;
+  font-size: 0.9rem;
+  color: #cbd5e1;
 }
 
 .battle-canvas {

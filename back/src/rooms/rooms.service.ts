@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { FileStoreService } from '../storage/file-store.service';
+import { PrismaService } from 'nestjs-prisma';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import {
   CanvasToken,
@@ -17,17 +17,15 @@ import {
 
 @Injectable()
 export class RoomsService {
-  private readonly fileName = 'rooms.json';
   private readonly sessions = new Map<string, RoomSession>();
 
-  constructor(private readonly fileStore: FileStoreService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async createRoom(input: {
     title: string;
     user?: AuthenticatedRequestUser;
     guestName?: string;
   }) {
-    const rooms = await this.readAll();
     const creator = this.resolveParticipant(input.user, input.guestName);
     const slug = this.createSlug();
 
@@ -41,8 +39,17 @@ export class RoomsService {
       diceLogs: [],
     };
 
-    rooms.push(room);
-    await this.fileStore.writeJson(this.fileName, rooms);
+    await this.prisma.room.create({
+      data: {
+        id: room.id,
+        slug: room.slug,
+        title: room.title,
+        createdAt: new Date(room.createdAt),
+        createdBy: room.createdBy as unknown as object,
+        canvas: room.canvas as unknown as object,
+        diceLogs: room.diceLogs as unknown as object,
+      },
+    });
 
     const session = this.createSession(slug, creator);
 
@@ -83,16 +90,18 @@ export class RoomsService {
     slug: string,
     canvas: RoomCanvasState,
   ): Promise<RoomCanvasState> {
-    const rooms = await this.readAll();
-    const room = rooms.find((item) => item.slug === slug);
+    const room = await this.findRoomOrThrow(slug);
 
-    if (!room) {
-      throw new NotFoundException('Room not found.');
-    }
+    const normalized = this.normalizeCanvas(canvas);
 
-    room.canvas = this.normalizeCanvas(canvas);
-    await this.fileStore.writeJson(this.fileName, rooms);
-    return room.canvas;
+    await this.prisma.room.update({
+      where: { slug },
+      data: {
+        canvas: normalized as unknown as object,
+      },
+    });
+
+    return normalized;
   }
 
   async validateSession(sessionId: string, roomSlug: string) {
@@ -133,12 +142,23 @@ export class RoomsService {
   }
 
   private async findRoomOrThrow(slug: string): Promise<RoomRecord> {
-    const rooms = await this.readAll();
-    const room = rooms.find((item) => item.slug === slug);
+    const dbRoom = await this.prisma.room.findUnique({
+      where: { slug },
+    });
 
-    if (!room) {
+    if (!dbRoom) {
       throw new NotFoundException('Room not found.');
     }
+
+    const room: RoomRecord = {
+      id: dbRoom.id,
+      slug: dbRoom.slug,
+      title: dbRoom.title,
+      createdAt: dbRoom.createdAt.toISOString(),
+      createdBy: dbRoom.createdBy as unknown as RoomParticipant,
+      canvas: dbRoom.canvas as unknown as RoomCanvasState,
+      diceLogs: (dbRoom.diceLogs as unknown as DiceRollLog[]) ?? [],
+    };
 
     return room;
   }
@@ -161,12 +181,7 @@ export class RoomsService {
     diceType: string,
     count: number,
   ): Promise<DiceRollLog> {
-    const rooms = await this.readAll();
-    const room = rooms.find((r) => r.slug === roomSlug);
-
-    if (!room) {
-      throw new NotFoundException('Room not found.');
-    }
+    const room = await this.findRoomOrThrow(roomSlug);
 
     const sides = this.parseDiceSides(diceType);
     const results: number[] = [];
@@ -188,11 +203,14 @@ export class RoomsService {
       createdAt: new Date().toISOString(),
     };
 
-    if (!room.diceLogs) {
-      room.diceLogs = [];
-    }
-    room.diceLogs.push(log);
-    await this.fileStore.writeJson(this.fileName, rooms);
+    const diceLogs = [...(room.diceLogs ?? []), log];
+
+    await this.prisma.room.update({
+      where: { slug: roomSlug },
+      data: {
+        diceLogs: diceLogs as unknown as object,
+      },
+    });
 
     return log;
   }
@@ -236,7 +254,10 @@ export class RoomsService {
     };
   }
 
-  private createSession(roomSlug: string, participant: RoomParticipant): RoomSession {
+  private createSession(
+    roomSlug: string,
+    participant: RoomParticipant,
+  ): RoomSession {
     const session: RoomSession = {
       sessionId: randomUUID(),
       roomSlug,
@@ -302,7 +323,5 @@ export class RoomsService {
     };
   }
 
-  private async readAll(): Promise<RoomRecord[]> {
-    return this.fileStore.readJson<RoomRecord[]>(this.fileName, []);
-  }
+  // JSON persistence removed after migration to PostgreSQL + Prisma.
 }

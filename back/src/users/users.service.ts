@@ -1,22 +1,47 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { FileStoreService } from '../storage/file-store.service';
+import { PrismaService } from 'nestjs-prisma';
 import { PublicUser, RegisteredUser } from './users.types';
+
+type DbUser = {
+  id: string;
+  email: string;
+  displayName: string;
+  passwordHash: string;
+  createdAt: Date;
+};
 
 @Injectable()
 export class UsersService {
-  private readonly fileName = 'users.json';
-
-  constructor(private readonly fileStore: FileStoreService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
   async findByEmail(email: string): Promise<RegisteredUser | undefined> {
-    const users = await this.readAll();
-    return users.find((user) => user.email.toLowerCase() === email.toLowerCase());
+    const user = await this.prisma.user.findFirst({
+      where: {
+        email: {
+          equals: email,
+          mode: 'insensitive',
+        },
+      },
+    });
+
+    if (!user) {
+      return undefined;
+    }
+
+    return this.fromDbUser(user as DbUser);
   }
 
   async findById(id: string): Promise<RegisteredUser | undefined> {
-    const users = await this.readAll();
-    return users.find((user) => user.id === id);
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+    });
+
+    if (!user) {
+      return undefined;
+    }
+
+    return this.fromDbUser(user as DbUser);
   }
 
   async create(input: {
@@ -24,20 +49,20 @@ export class UsersService {
     displayName: string;
     passwordHash: string;
   }): Promise<RegisteredUser> {
-    const users = await this.readAll();
+    const id = randomUUID();
+    const createdAt = new Date();
 
-    const newUser: RegisteredUser = {
-      id: randomUUID(),
-      email: input.email.trim().toLowerCase(),
-      displayName: input.displayName.trim(),
-      passwordHash: input.passwordHash,
-      createdAt: new Date().toISOString(),
-    };
+    const user = await this.prisma.user.create({
+      data: {
+        id,
+        email: input.email.trim().toLowerCase(),
+        displayName: input.displayName.trim(),
+        passwordHash: input.passwordHash,
+        createdAt,
+      },
+    });
 
-    users.push(newUser);
-    await this.fileStore.writeJson(this.fileName, users);
-
-    return newUser;
+    return this.fromDbUser(user as DbUser);
   }
 
   toPublicUser(user: RegisteredUser): PublicUser {
@@ -45,7 +70,13 @@ export class UsersService {
     return publicUser;
   }
 
-  private async readAll(): Promise<RegisteredUser[]> {
-    return this.fileStore.readJson<RegisteredUser[]>(this.fileName, []);
+  private fromDbUser(user: DbUser): RegisteredUser {
+    return {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      passwordHash: user.passwordHash,
+      createdAt: user.createdAt.toISOString(),
+    };
   }
 }

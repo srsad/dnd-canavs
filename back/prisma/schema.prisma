@@ -1,0 +1,25 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  displayName  String
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model Room {
+  id        String   @id @default(uuid())
+  slug      String   @unique
+  title     String
+  createdAt DateTime @default(now())
+  createdBy Json     // RoomParticipant
+  canvas    Json     // RoomCanvasState
+  diceLogs  Json     @default("[]") // DiceRollLog[]
+}

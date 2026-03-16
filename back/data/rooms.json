@@ -1265,5 +1265,106 @@
         }
       ]
     }
+  },
+  {
+    "id": "2c807471-50dd-4d81-a098-068da1050664",
+    "slug": "ce41fb04",
+    "title": "test room name",
+    "createdAt": "2026-03-16T18:42:59.794Z",
+    "createdBy": {
+      "id": "guest:8d48ea08-0d97-42e1-a619-b972955b733f",
+      "displayName": "test 1",
+      "kind": "guest"
+    },
+    "canvas": {
+      "backgroundColor": "#f8f1df",
+      "gridEnabled": true,
+      "strokes": [],
+      "tokens": [
+        {
+          "id": "971ef1da-095c-4898-8f98-5f19af589e3d",
+          "label": "GM",
+          "color": "#7c3aed",
+          "x": 133.90070921985816,
+          "y": 268.7854609929078,
+          "size": 40
+        },
+        {
+          "id": "1bc2c667-94a9-4270-a01c-ec0f164be13c",
+          "label": "T2",
+          "color": "#dc2626",
+          "x": 140,
+          "y": 140,
+          "size": 42
+        },
+        {
+          "id": "ac2cc675-ca1b-4fce-bbfe-55f9220c2638",
+          "label": "T3",
+          "color": "#dc2626",
+          "x": 360.8510638297873,
+          "y": 98.00531914893618,
+          "size": 42
+        },
+        {
+          "id": "a250f705-ac55-4e0a-b0a4-7a9a49ef5668",
+          "label": "T4",
+          "color": "#dc2626",
+          "x": 441.9858156028369,
+          "y": 127.50886524822695,
+          "size": 42
+        }
+      ]
+    },
+    "diceLogs": [
+      {
+        "id": "9140ea8b-b24b-4d5f-9783-a339191de53b",
+        "participantId": "guest:c7ea5168-8618-4f4e-83e7-39e63a6899a0",
+        "participantDisplayName": "test 2",
+        "diceType": "d6",
+        "count": 2,
+        "results": [
+          1,
+          5
+        ],
+        "total": 6,
+        "createdAt": "2026-03-16T19:56:39.502Z"
+      },
+      {
+        "id": "f260baa4-ea05-4549-8bfe-f42f275e710c",
+        "participantId": "guest:c7ea5168-8618-4f4e-83e7-39e63a6899a0",
+        "participantDisplayName": "test 2",
+        "diceType": "d4",
+        "count": 1,
+        "results": [
+          2
+        ],
+        "total": 2,
+        "createdAt": "2026-03-16T19:56:58.813Z"
+      },
+      {
+        "id": "7b463cbc-a041-4f0c-a9db-fe613a57bb62",
+        "participantId": "guest:c7ea5168-8618-4f4e-83e7-39e63a6899a0",
+        "participantDisplayName": "test 2",
+        "diceType": "d4",
+        "count": 1,
+        "results": [
+          2
+        ],
+        "total": 2,
+        "createdAt": "2026-03-16T19:57:05.232Z"
+      },
+      {
+        "id": "fb5c6098-3654-4f19-8027-2a2940d97dc8",
+        "participantId": "guest:c7ea5168-8618-4f4e-83e7-39e63a6899a0",
+        "participantDisplayName": "test 2",
+        "diceType": "d4",
+        "count": 1,
+        "results": [
+          4
+        ],
+        "total": 4,
+        "createdAt": "2026-03-16T19:57:07.628Z"
+      }
+    ]
   }
 ]
