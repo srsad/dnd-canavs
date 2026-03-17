@@ -17,7 +17,7 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            cd /path/to/dnd-cavas
+            cd /home/dnd-canvas/
             git pull origin main
             docker compose pull
             docker compose up -d --build
