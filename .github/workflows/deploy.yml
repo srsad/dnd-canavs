@@ -15,9 +15,9 @@ jobs:
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          password: ${{ secrets.SSH_PASSWORD }}
           script: |
-            cd /home/dnd-canvas/  # путь к проекту на сервере
+            cd /path/to/dnd-cavas
             git pull origin main
             docker compose pull
             docker compose up -d --build
