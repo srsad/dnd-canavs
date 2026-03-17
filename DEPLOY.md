@@ -81,4 +81,5 @@ services:
 
 1. **Процесс завершается сразу** — убедитесь, что команда запуска `docker compose up` **без** `-d`
 2. **Не находит docker-compose** — на некоторых платформах используется `docker-compose` (с дефисом)
-3. **База данных** — для persistent storage нужна поддержка volumes. На Railway/Render база обычно управляется отдельно — тогда используйте `back/docker-compose.yml` (только backend+db) и деплойте frontend отдельно
+3. **`volumes is not allowed`** (Coolify и др.) — в `docker-compose.yml` volumes отключены. Данные БД будут теряться при перезапуске. Для production добавьте managed PostgreSQL (плагин/сервис платформы) и задайте `DATABASE_URL` — тогда можно исключить сервис `db` из compose.
+4. **База данных** — для persistent storage используйте managed PostgreSQL. На Railway/Render база обычно управляется отдельно — тогда используйте `back/docker-compose.yml` (только backend+db) и деплойте frontend отдельно
