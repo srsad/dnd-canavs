@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import CanvasBoard from '../components/CanvasBoard.vue';
+import ChatPanel from '../components/ChatPanel.vue';
+import CanvasHistoryPanel from '../components/CanvasHistoryPanel.vue';
 import DiceLogPanel from '../components/DiceLogPanel.vue';
 import DiceRoller from '../components/DiceRoller.vue';
 import ParticipantsPanel from '../components/ParticipantsPanel.vue';
@@ -16,19 +18,27 @@ const roomStore = useRoomStore();
 const slug = computed(() => String(route.params.slug));
 const guestName = ref('');
 const connected = ref(false);
+const replayCanvas = ref<RoomCanvas | null>(null);
 
 const canvasModel = computed<RoomCanvas>({
   get() {
-    return (
-      roomStore.room?.canvas ?? {
-        backgroundColor: '#f8f1df',
-        gridEnabled: true,
-        strokes: [],
-        tokens: [],
-      }
-    );
+    if (replayCanvas.value) {
+      return replayCanvas.value;
+    }
+
+    return roomStore.room?.canvas ?? {
+      backgroundColor: '#f8f1df',
+      gridEnabled: true,
+      tokens: [],
+      layers: [],
+      fogEnabled: false,
+      fogStrokes: [],
+    };
   },
   set(value) {
+    if (replayCanvas.value) {
+      return;
+    }
     roomStore.replaceCanvas(value);
   },
 });
@@ -137,6 +147,24 @@ async function copyLink() {
         <ParticipantsPanel
           :participants="roomStore.participants"
           :current-participant-id="roomStore.currentParticipant?.id"
+        />
+
+        <CanvasHistoryPanel
+          :history="(roomStore.room?.canvasHistory ?? [])"
+          :can-apply="roomStore.currentParticipant?.role === 'gm' && !replayCanvas"
+          @preview="replayCanvas = $event"
+          @apply="
+            (canvas) => {
+              replayCanvas = null;
+              roomStore.replaceCanvas(canvas);
+            }
+          "
+        />
+
+        <ChatPanel
+          :messages="(roomStore.room?.chatMessages ?? [])"
+          :can-send="connected"
+          @send="roomStore.sendChat"
         />
 
         <DiceRoller />

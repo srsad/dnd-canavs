@@ -82,8 +82,19 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() body: { canvas: RoomCanvasState },
   ) {
     const roomSlug = client.data.roomSlug;
+    const sessionId = client.data.sessionId;
 
-    if (!roomSlug) {
+    if (!roomSlug || !sessionId) {
+      return;
+    }
+
+    try {
+      const { session } = await this.roomsService.validateSession(sessionId, roomSlug);
+
+      if (session.participant.role !== 'gm') {
+        return;
+      }
+    } catch {
       return;
     }
 
@@ -127,6 +138,32 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server.to(roomSlug).emit('dice_log_added', { log });
     } catch {
       // session invalid — ignore
+    }
+  }
+
+  @SubscribeMessage('chat:send')
+  async sendChatMessage(
+    @ConnectedSocket() client: RoomSocket,
+    @MessageBody() body: { text: string },
+  ) {
+    const roomSlug = client.data.roomSlug;
+    const sessionId = client.data.sessionId;
+
+    if (!roomSlug || !sessionId) {
+      return;
+    }
+
+    try {
+      const { session } = await this.roomsService.validateSession(sessionId, roomSlug);
+      const message = await this.roomsService.addChatMessage(
+        roomSlug,
+        session.participant,
+        body.text,
+      );
+
+      this.server.to(roomSlug).emit('chat:message', { message });
+    } catch {
+      // invalid session or bad message — ignore
     }
   }
 

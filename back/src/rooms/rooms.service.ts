@@ -8,6 +8,9 @@ import { PrismaService } from 'nestjs-prisma';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import {
   CanvasToken,
+  CanvasStroke,
+  CanvasStrokePoint,
+  ChatMessage,
   DiceRollLog,
   RoomCanvasState,
   RoomParticipant,
@@ -129,6 +132,11 @@ export class RoomsService {
     };
   }
 
+  async getCanvasHistory(slug: string): Promise<RoomCanvasState[]> {
+    const room = await this.findRoomOrThrow(slug);
+    return room.canvasHistory ?? [];
+  }
+
   disconnectSession(sessionId: string) {
     this.sessions.delete(sessionId);
   }
@@ -164,7 +172,7 @@ export class RoomsService {
       title: dbRoom.title,
       createdAt: dbRoom.createdAt.toISOString(),
       createdBy: dbRoom.createdBy as unknown as RoomParticipant,
-      canvas: dbRoom.canvas as unknown as RoomCanvasState,
+      canvas: this.normalizeCanvas(dbRoom.canvas as unknown as RoomCanvasState),
       diceLogs: (dbRoom.diceLogs as unknown as DiceRollLog[]) ?? [],
       canvasHistory: (dbRoom.canvasHistory as unknown as RoomCanvasState[]) ?? [],
       chatMessages: (dbRoom.chatMessages as unknown as ChatMessage[]) ?? [],
@@ -225,6 +233,38 @@ export class RoomsService {
     });
 
     return log;
+  }
+
+  async addChatMessage(
+    roomSlug: string,
+    participant: RoomParticipant,
+    text: string,
+  ): Promise<ChatMessage> {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      throw new BadRequestException('Message text is required.');
+    }
+
+    const room = await this.findRoomOrThrow(roomSlug);
+
+    const message: ChatMessage = {
+      id: randomUUID(),
+      participantId: participant.id,
+      participantDisplayName: participant.displayName,
+      text: trimmed.slice(0, 1000),
+      createdAt: new Date().toISOString(),
+    };
+
+    const nextMessages = [...(room.chatMessages ?? []), message].slice(-100);
+
+    await this.prisma.room.update({
+      where: { slug: roomSlug },
+      data: {
+        chatMessages: nextMessages as unknown as object,
+      },
+    });
+
+    return message;
   }
 
   private parseDiceSides(diceType: string): number {
@@ -293,7 +333,6 @@ export class RoomsService {
     return {
       backgroundColor: '#f8f1df',
       gridEnabled: true,
-      strokes: [],
       tokens: [
         {
           id: randomUUID(),
@@ -304,27 +343,115 @@ export class RoomsService {
           size: 40,
         } satisfies CanvasToken,
       ],
+      layers: [
+        {
+          id: randomUUID(),
+          name: 'Base',
+          visible: true,
+          strokes: [],
+        },
+      ],
+      fogEnabled: false,
+      fogStrokes: [],
     };
   }
 
   private normalizeCanvas(canvas: RoomCanvasState): RoomCanvasState {
+    const legacyStrokes = Array.isArray((canvas as unknown as { strokes?: unknown }).strokes)
+      ? ((canvas as unknown as { strokes: unknown[] }).strokes as unknown[])
+      : [];
+
+    const normalizedStrokes = legacyStrokes.map((stroke) => {
+      const strokeObject = stroke as Partial<CanvasStroke>;
+      return {
+        id: strokeObject.id || randomUUID(),
+        color: strokeObject.color || '#111827',
+        width: Number.isFinite(strokeObject.width) ? (strokeObject.width as number) : 4,
+        authorId: strokeObject.authorId || 'unknown',
+        points: Array.isArray(strokeObject.points)
+          ? strokeObject.points.map((point) => ({
+              x: Number((point as CanvasStrokePoint).x) || 0,
+              y: Number((point as CanvasStrokePoint).y) || 0,
+            }))
+          : [],
+      } satisfies CanvasStroke;
+    });
+
+    const layersInput = (canvas as unknown as { layers?: unknown }).layers;
+    const baseLayers = Array.isArray(layersInput)
+      ? (layersInput as unknown[]).map((layer) => {
+          const layerObject = layer as Partial<{
+            id: string;
+            name: string;
+            visible: boolean;
+            strokes: unknown;
+          }>;
+
+          const strokes = Array.isArray(layerObject.strokes)
+            ? (layerObject.strokes as unknown[]).map((stroke) => {
+                const strokeObject = stroke as Partial<CanvasStroke>;
+                return {
+                  id: strokeObject.id || randomUUID(),
+                  color: strokeObject.color || '#111827',
+                  width: Number.isFinite(strokeObject.width) ? (strokeObject.width as number) : 4,
+                  authorId: strokeObject.authorId || 'unknown',
+                  points: Array.isArray(strokeObject.points)
+                    ? strokeObject.points.map((point) => ({
+                        x: Number((point as CanvasStrokePoint).x) || 0,
+                        y: Number((point as CanvasStrokePoint).y) || 0,
+                      }))
+                    : [],
+                } satisfies CanvasStroke;
+              })
+            : [];
+
+          return {
+            id: layerObject.id || randomUUID(),
+            name: layerObject.name?.trim() || 'Layer',
+            visible: layerObject.visible !== false,
+            strokes,
+          };
+        })
+      : [];
+
+    const layers =
+      baseLayers.length > 0
+        ? baseLayers
+        : [
+            {
+              id: randomUUID(),
+              name: 'Base',
+              visible: true,
+              strokes: normalizedStrokes,
+            },
+          ];
+
+    const fogStrokesInput = (canvas as unknown as { fogStrokes?: unknown }).fogStrokes;
+    const fogStrokes = Array.isArray(fogStrokesInput)
+      ? (fogStrokesInput as unknown[]).map((stroke) => {
+          const strokeObject = stroke as Partial<{
+            id: string;
+            width: number;
+            points: unknown;
+            authorId: string;
+          }>;
+          return {
+            id: strokeObject.id || randomUUID(),
+            width: Number.isFinite(strokeObject.width) ? (strokeObject.width as number) : 40,
+            authorId: strokeObject.authorId || 'unknown',
+            points: Array.isArray(strokeObject.points)
+              ? (strokeObject.points as unknown[]).map((point) => ({
+                  x: Number((point as CanvasStrokePoint).x) || 0,
+                  y: Number((point as CanvasStrokePoint).y) || 0,
+                }))
+              : [],
+          };
+        })
+      : [];
+
     return {
       backgroundColor: canvas.backgroundColor || '#f8f1df',
       gridEnabled: Boolean(canvas.gridEnabled),
-      strokes: Array.isArray(canvas.strokes)
-        ? canvas.strokes.map((stroke) => ({
-            id: stroke.id || randomUUID(),
-            color: stroke.color || '#111827',
-            width: Number.isFinite(stroke.width) ? stroke.width : 4,
-            authorId: stroke.authorId || 'unknown',
-            points: Array.isArray(stroke.points)
-              ? stroke.points.map((point) => ({
-                  x: Number(point.x) || 0,
-                  y: Number(point.y) || 0,
-                }))
-              : [],
-          }))
-        : [],
       tokens: Array.isArray(canvas.tokens)
         ? canvas.tokens.map((token) => ({
             id: token.id || randomUUID(),
@@ -335,6 +462,9 @@ export class RoomsService {
             size: Number(token.size) || 40,
           }))
         : [],
+      layers,
+      fogEnabled: Boolean((canvas as unknown as { fogEnabled?: unknown }).fogEnabled),
+      fogStrokes,
     };
   }
 

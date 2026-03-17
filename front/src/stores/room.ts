@@ -4,6 +4,7 @@ import type { Socket } from 'socket.io-client';
 import { apiRequest } from '../lib/api';
 import { createRoomSocket } from '../lib/socket';
 import type {
+  ChatMessage,
   DiceRollLog,
   JoinRoomResponse,
   Participant,
@@ -141,6 +142,15 @@ export const useRoomStore = defineStore('room', () => {
       };
     });
 
+    nextSocket.on('chat:message', (payload: { message: ChatMessage }) => {
+      if (!room.value) return;
+      const messages = room.value.chatMessages ?? [];
+      room.value = {
+        ...room.value,
+        chatMessages: [...messages, payload.message].slice(-100),
+      };
+    });
+
     nextSocket.on('connect_error', () => {
       error.value = 'Realtime connection failed.';
     });
@@ -152,8 +162,16 @@ export const useRoomStore = defineStore('room', () => {
     socket.value?.emit('dice:roll', { diceType, count });
   }
 
+  function sendChat(text: string) {
+    socket.value?.emit('chat:send', { text });
+  }
+
   function replaceCanvas(canvas: RoomCanvas) {
     if (!room.value) {
+      return;
+    }
+
+    if (currentParticipant.value?.role !== 'gm') {
       return;
     }
 
@@ -202,6 +220,7 @@ export const useRoomStore = defineStore('room', () => {
     replaceCanvas,
     reset,
     rollDice,
+    sendChat,
     room,
     sessionId,
     syncing,

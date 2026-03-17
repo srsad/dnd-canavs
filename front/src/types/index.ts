@@ -40,11 +40,25 @@ export type Token = {
   size: number;
 };
 
+export type CanvasLayer = {
+  id: string;
+  name: string;
+  visible: boolean;
+  strokes: Stroke[];
+};
+
 export type RoomCanvas = {
   backgroundColor: string;
   gridEnabled: boolean;
-  strokes: Stroke[];
   tokens: Token[];
+  layers: CanvasLayer[];
+  fogEnabled?: boolean;
+  fogStrokes?: Array<{
+    id: string;
+    width: number;
+    points: StrokePoint[];
+    authorId: string;
+  }>;
 };
 
 export type ChatMessage = {

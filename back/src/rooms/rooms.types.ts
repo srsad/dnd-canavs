@@ -28,11 +28,25 @@ export type CanvasToken = {
   size: number;
 };
 
+export type CanvasLayer = {
+  id: string;
+  name: string;
+  visible: boolean;
+  strokes: CanvasStroke[];
+};
+
 export type RoomCanvasState = {
   backgroundColor: string;
   gridEnabled: boolean;
-  strokes: CanvasStroke[];
   tokens: CanvasToken[];
+  layers: CanvasLayer[];
+  fogEnabled?: boolean;
+  fogStrokes?: Array<{
+    id: string;
+    width: number;
+    points: CanvasStrokePoint[];
+    authorId: string;
+  }>;
 };
 
 export type ChatMessage = {

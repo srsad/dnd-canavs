@@ -28,6 +28,11 @@ export class RoomsController {
     return this.roomsService.getRoomBySlug(slug);
   }
 
+  @Get(':slug/canvas-history')
+  getCanvasHistory(@Param('slug') slug: string) {
+    return this.roomsService.getCanvasHistory(slug);
+  }
+
   @Post(':slug/join')
   joinRoom(
     @Param('slug') slug: string,

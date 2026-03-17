@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { RoomCanvas, Stroke, Token } from '../types';
+import type { CanvasLayer, RoomCanvas, Stroke, StrokePoint, Token } from '../types';
 
 const props = defineProps<{
   modelValue: RoomCanvas;
@@ -24,6 +24,7 @@ const viewportSize = ref({ width: 960, height: 600 });
 const localCanvas = ref<RoomCanvas>(cloneCanvas(props.modelValue));
 const brushColor = ref('#111827');
 const brushWidth = ref(4);
+const fogBrushWidth = ref(46);
 
 const pan = ref({ x: 0, y: 0 });
 const zoom = ref(1);
@@ -32,11 +33,17 @@ let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
 let isPanning = false;
 let activeStroke: Stroke | null = null;
 let activeTokenId: string | null = null;
+let activeFogStroke: { id: string; width: number; points: StrokePoint[]; authorId: string } | null =
+  null;
+
+const activeLayerId = ref<string>('');
+const toolMode = ref<'draw' | 'fog'>('draw');
 
 watch(
   () => props.modelValue,
   async (value) => {
     localCanvas.value = cloneCanvas(value);
+    ensureActiveLayer();
     await nextTick();
     renderCanvas();
   },
@@ -58,6 +65,7 @@ onMounted(() => {
     nextTick(() => renderCanvas());
   });
   resizeObserver.observe(el);
+  ensureActiveLayer();
 });
 
 onBeforeUnmount(() => {
@@ -76,9 +84,12 @@ function toggleGrid() {
 
 function clearBoard() {
   if (props.canEdit === false) return;
+  const layerId = activeLayerId.value;
   updateCanvas({
     ...localCanvas.value,
-    strokes: [],
+    layers: localCanvas.value.layers.map((layer) =>
+      layer.id === layerId ? { ...layer, strokes: [] } : layer,
+    ),
   });
 }
 
@@ -108,6 +119,8 @@ function startDrawing(event: PointerEvent) {
     return;
   }
   if (props.canEdit === false) return;
+  if (toolMode.value !== 'draw') return;
+  if (!activeLayerId.value) return;
 
   const point = getRelativePoint(event);
   activeStroke = {
@@ -124,14 +137,23 @@ function draw(event: PointerEvent) {
     return;
   }
 
-  activeStroke.points.push(getRelativePoint(event));
+  const stroke = activeStroke;
+  const strokeId = stroke.id;
+  stroke.points.push(getRelativePoint(event));
 
+  const layerId = activeLayerId.value;
   localCanvas.value = {
     ...localCanvas.value,
-    strokes: [
-      ...localCanvas.value.strokes.filter((stroke) => stroke.id !== activeStroke?.id),
-      activeStroke,
-    ],
+    layers: localCanvas.value.layers.map((layer) => {
+      if (layer.id !== layerId) return layer;
+      return {
+        ...layer,
+        strokes: [
+          ...layer.strokes.filter((stroke) => stroke.id !== strokeId),
+          stroke,
+        ],
+      };
+    }),
   };
 
   renderCanvas();
@@ -142,15 +164,68 @@ function finishDrawing() {
     return;
   }
 
+  const stroke = activeStroke;
+  const strokeId = stroke.id;
+  const layerId = activeLayerId.value;
   updateCanvas({
     ...localCanvas.value,
-    strokes: [
-      ...localCanvas.value.strokes.filter((stroke) => stroke.id !== activeStroke?.id),
-      activeStroke,
-    ],
+    layers: localCanvas.value.layers.map((layer) => {
+      if (layer.id !== layerId) return layer;
+      return {
+        ...layer,
+        strokes: [
+          ...layer.strokes.filter((stroke) => stroke.id !== strokeId),
+          stroke,
+        ],
+      };
+    }),
   });
 
   activeStroke = null;
+}
+
+function startFogErase(event: PointerEvent) {
+  if (activeTokenId || isPanning) return;
+  if (props.canEdit === false) return;
+  if (toolMode.value !== 'fog') return;
+  if (!localCanvas.value.fogEnabled) return;
+
+  const point = getRelativePoint(event);
+  activeFogStroke = {
+    id: crypto.randomUUID(),
+    width: fogBrushWidth.value,
+    authorId: props.participantId,
+    points: [point],
+  };
+}
+
+function eraseFog(event: PointerEvent) {
+  if (!activeFogStroke) return;
+  activeFogStroke.points.push(getRelativePoint(event));
+
+  localCanvas.value = {
+    ...localCanvas.value,
+    fogStrokes: [
+      ...(localCanvas.value.fogStrokes ?? []).filter((stroke) => stroke.id !== activeFogStroke?.id),
+      activeFogStroke,
+    ],
+  };
+
+  renderCanvas();
+}
+
+function finishFogErase() {
+  if (!activeFogStroke) return;
+
+  updateCanvas({
+    ...localCanvas.value,
+    fogStrokes: [
+      ...(localCanvas.value.fogStrokes ?? []).filter((stroke) => stroke.id !== activeFogStroke?.id),
+      activeFogStroke,
+    ],
+  });
+
+  activeFogStroke = null;
 }
 
 function startPointerDown(event: PointerEvent) {
@@ -243,6 +318,7 @@ function resetView() {
 
 function startTokenDrag(tokenId: string, event: PointerEvent) {
   event.stopPropagation();
+  if (props.canEdit === false) return;
   activeTokenId = tokenId;
 }
 
@@ -251,7 +327,8 @@ function handlePointerDown(event: PointerEvent) {
     startPointerDown(event);
   } else if (event.button === 0 && !activeTokenId) {
     if (props.canEdit === false) return;
-    startDrawing(event);
+    if (toolMode.value === 'fog') startFogErase(event);
+    else startDrawing(event);
   }
 }
 
@@ -280,7 +357,8 @@ function handlePointerMove(event: PointerEvent) {
     return;
   }
 
-  draw(event);
+  if (toolMode.value === 'fog') eraseFog(event);
+  else draw(event);
 }
 
 function finishInteraction() {
@@ -289,6 +367,7 @@ function finishInteraction() {
     activeTokenId = null;
   }
 
+  finishFogErase();
   finishDrawing();
 }
 
@@ -346,20 +425,56 @@ function renderCanvas() {
     }
   }
 
-  for (const stroke of localCanvas.value.strokes) {
-    if (stroke.points.length === 0) continue;
+  for (const layer of localCanvas.value.layers) {
+    if (!layer.visible) continue;
 
-    context.beginPath();
-    context.strokeStyle = stroke.color;
-    context.lineWidth = stroke.width;
-    context.lineCap = 'round';
-    context.lineJoin = 'round';
+    for (const stroke of layer.strokes) {
+      if (stroke.points.length === 0) continue;
 
-    stroke.points.forEach((point, index) => {
-      if (index === 0) context.moveTo(point.x, point.y);
-      else context.lineTo(point.x, point.y);
-    });
-    context.stroke();
+      context.beginPath();
+      context.strokeStyle = stroke.color;
+      context.lineWidth = stroke.width;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+
+      stroke.points.forEach((point, index) => {
+        if (index === 0) context.moveTo(point.x, point.y);
+        else context.lineTo(point.x, point.y);
+      });
+      context.stroke();
+    }
+  }
+
+  if (localCanvas.value.fogEnabled) {
+    context.save();
+    context.fillStyle = 'rgba(15, 23, 42, 0.62)';
+    context.fillRect(
+      worldLeft - 1,
+      worldTop - 1,
+      worldRight - worldLeft + 2,
+      worldBottom - worldTop + 2,
+    );
+
+    const fogStrokes = localCanvas.value.fogStrokes ?? [];
+    if (fogStrokes.length > 0) {
+      context.globalCompositeOperation = 'destination-out';
+      context.strokeStyle = '#000';
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+
+      for (const stroke of fogStrokes) {
+        if (stroke.points.length === 0) continue;
+        context.beginPath();
+        context.lineWidth = stroke.width;
+        stroke.points.forEach((point, index) => {
+          if (index === 0) context.moveTo(point.x, point.y);
+          else context.lineTo(point.x, point.y);
+        });
+        context.stroke();
+      }
+    }
+
+    context.restore();
   }
 
   context.restore();
@@ -378,14 +493,47 @@ function getRelativePoint(event: PointerEvent) {
 }
 
 function cloneCanvas(value: RoomCanvas): RoomCanvas {
+  const layers: CanvasLayer[] = Array.isArray((value as unknown as { layers?: unknown }).layers)
+    ? (value.layers ?? []).map((layer) => ({
+        ...layer,
+        strokes: layer.strokes.map((stroke) => ({
+          ...stroke,
+          points: stroke.points.map((point) => ({ ...point })),
+        })),
+      }))
+    : [];
+
+  const legacyStrokes = Array.isArray((value as unknown as { strokes?: unknown }).strokes)
+    ? (((value as unknown as { strokes?: Stroke[] }).strokes as Stroke[]) ?? []).map((stroke) => ({
+        ...stroke,
+        points: stroke.points.map((point) => ({ ...point })),
+      }))
+    : [];
+
+  const normalizedLayers =
+    layers.length > 0
+      ? layers
+      : [
+          {
+            id: crypto.randomUUID(),
+            name: 'Base',
+            visible: true,
+            strokes: legacyStrokes,
+          },
+        ];
+
   return {
     backgroundColor: value.backgroundColor,
     gridEnabled: value.gridEnabled,
-    strokes: value.strokes.map((stroke) => ({
-      ...stroke,
-      points: stroke.points.map((point) => ({ ...point })),
-    })),
     tokens: value.tokens.map((token) => ({ ...token })),
+    layers: normalizedLayers,
+    fogEnabled: Boolean(value.fogEnabled),
+    fogStrokes: Array.isArray(value.fogStrokes)
+      ? value.fogStrokes.map((stroke) => ({
+          ...stroke,
+          points: stroke.points.map((point) => ({ ...point })),
+        }))
+      : [],
   };
 }
 
@@ -401,6 +549,67 @@ const tokenStyle = computed(() =>
     },
   })),
 );
+
+const activeLayer = computed(() => {
+  const id = activeLayerId.value;
+  return localCanvas.value.layers.find((layer) => layer.id === id) ?? localCanvas.value.layers[0];
+});
+
+function ensureActiveLayer() {
+  if (!Array.isArray(localCanvas.value.layers) || localCanvas.value.layers.length === 0) {
+    localCanvas.value = {
+      ...localCanvas.value,
+      layers: [
+        {
+          id: crypto.randomUUID(),
+          name: 'Base',
+          visible: true,
+          strokes: [],
+        },
+      ],
+      fogEnabled: Boolean(localCanvas.value.fogEnabled),
+      fogStrokes: localCanvas.value.fogStrokes ?? [],
+    };
+  }
+
+  if (!activeLayerId.value || !localCanvas.value.layers.some((l) => l.id === activeLayerId.value)) {
+    activeLayerId.value = localCanvas.value.layers[0]?.id ?? '';
+  }
+}
+
+function addLayer() {
+  if (props.canEdit === false) return;
+  const newLayer: CanvasLayer = {
+    id: crypto.randomUUID(),
+    name: `Layer ${localCanvas.value.layers.length + 1}`,
+    visible: true,
+    strokes: [],
+  };
+  updateCanvas({
+    ...localCanvas.value,
+    layers: [...localCanvas.value.layers, newLayer],
+  });
+  activeLayerId.value = newLayer.id;
+}
+
+function toggleLayerVisibility(layerId: string) {
+  if (props.canEdit === false) return;
+  updateCanvas({
+    ...localCanvas.value,
+    layers: localCanvas.value.layers.map((layer) =>
+      layer.id === layerId ? { ...layer, visible: !layer.visible } : layer,
+    ),
+  });
+}
+
+function toggleFog() {
+  if (props.canEdit === false) return;
+  updateCanvas({
+    ...localCanvas.value,
+    fogEnabled: !localCanvas.value.fogEnabled,
+    fogStrokes: localCanvas.value.fogStrokes ?? [],
+  });
+}
 
 </script>
 
@@ -419,6 +628,46 @@ const tokenStyle = computed(() =>
       </div>
 
       <div class="toolbar-group">
+        <label class="field compact">
+          <span>Слой</span>
+          <select v-model="activeLayerId" :disabled="canEdit === false">
+            <option v-for="layer in localCanvas.layers" :key="layer.id" :value="layer.id">
+              {{ layer.visible ? '👁 ' : '⛔ ' }}{{ layer.name }}
+            </option>
+          </select>
+        </label>
+        <button class="ghost-button" type="button" :disabled="canEdit === false" @click="addLayer">
+          + слой
+        </button>
+        <button
+          v-if="activeLayer"
+          class="ghost-button"
+          type="button"
+          :disabled="canEdit === false"
+          @click="toggleLayerVisibility(activeLayer.id)"
+        >
+          {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
+        </button>
+
+        <div class="segmented">
+          <button
+            type="button"
+            :class="{ active: toolMode === 'draw' }"
+            :disabled="canEdit === false"
+            @click="toolMode = 'draw'"
+          >
+            Рисование
+          </button>
+          <button
+            type="button"
+            :class="{ active: toolMode === 'fog' }"
+            :disabled="canEdit === false || !localCanvas.fogEnabled"
+            @click="toolMode = 'fog'"
+          >
+            Туман (стереть)
+          </button>
+        </div>
+
         <div class="zoom-controls">
           <button class="ghost-button zoom-btn" type="button" title="Приблизить" @click="zoomIn">+</button>
           <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
@@ -428,6 +677,13 @@ const tokenStyle = computed(() =>
         <button class="ghost-button" type="button" @click="toggleGrid">
           {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
         </button>
+        <button class="ghost-button" type="button" :disabled="canEdit === false" @click="toggleFog">
+          {{ localCanvas.fogEnabled ? 'Выключить туман' : 'Включить туман' }}
+        </button>
+        <label v-if="localCanvas.fogEnabled" class="field compact">
+          <span>Туман</span>
+          <input v-model.number="fogBrushWidth" type="range" min="14" max="120" />
+        </label>
         <button class="ghost-button" type="button" @click="addToken">Добавить фишку</button>
         <button class="ghost-button" type="button" @click="clearBoard">Очистить линии</button>
       </div>
