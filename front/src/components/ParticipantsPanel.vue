@@ -16,7 +16,11 @@ defineProps<{
       <li v-for="participant in participants" :key="participant.id">
         <div>
           <strong>{{ participant.displayName }}</strong>
-          <span>{{ participant.kind === 'registered' ? 'аккаунт' : 'гость' }}</span>
+          <span>
+            {{ participant.role === 'gm' ? 'GM' : 'игрок' }}
+            ·
+            {{ participant.kind === 'registered' ? 'аккаунт' : 'гость' }}
+          </span>
         </div>
         <mark v-if="participant.id === currentParticipantId">Вы</mark>
       </li>

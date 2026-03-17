@@ -90,10 +90,7 @@ async function copyLink() {
     <section class="room-header panel">
       <div>
         <p class="eyebrow">Комната</p>
-        <h1>{{ roomStore.room?.title ?? 'Загрузка...' }}</h1>
-        <p class="hero-copy">
-          Ссылка для игроков: <code>{{ roomUrl }}</code>
-        </p>
+        <h4>{{ roomStore.room?.title ?? 'Загрузка...' }}</h4>
       </div>
 
       <button class="ghost-button" type="button" @click="copyLink">Скопировать ссылку</button>
@@ -133,6 +130,7 @@ async function copyLink() {
       <CanvasBoard
         v-model="canvasModel"
         :participant-id="roomStore.currentParticipant?.id ?? 'unknown'"
+        :can-edit="roomStore.currentParticipant?.role === 'gm'"
       />
 
       <div class="room-sidebar">

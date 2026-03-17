@@ -26,7 +26,7 @@ export class RoomsService {
     user?: AuthenticatedRequestUser;
     guestName?: string;
   }) {
-    const creator = this.resolveParticipant(input.user, input.guestName);
+    const creator = this.resolveParticipant(input.user, input.guestName, 'gm');
     const slug = this.createSlug();
 
     const room: RoomRecord = {
@@ -37,6 +37,8 @@ export class RoomsService {
       createdBy: creator,
       canvas: this.createDefaultCanvas(),
       diceLogs: [],
+      canvasHistory: [],
+      chatMessages: [],
     };
 
     await this.prisma.room.create({
@@ -48,6 +50,8 @@ export class RoomsService {
         createdBy: room.createdBy as unknown as object,
         canvas: room.canvas as unknown as object,
         diceLogs: room.diceLogs as unknown as object,
+        canvasHistory: room.canvasHistory as unknown as object,
+        chatMessages: room.chatMessages as unknown as object,
       },
     });
 
@@ -75,7 +79,7 @@ export class RoomsService {
     guestName?: string;
   }) {
     const room = await this.findRoomOrThrow(input.slug);
-    const participant = this.resolveParticipant(input.user, input.guestName);
+    const participant = this.resolveParticipant(input.user, input.guestName, 'player');
     const session = this.createSession(input.slug, participant);
 
     return {
@@ -94,10 +98,14 @@ export class RoomsService {
 
     const normalized = this.normalizeCanvas(canvas);
 
+    const history = [...(room.canvasHistory ?? []), room.canvas];
+    const limitedHistory = history.slice(-50);
+
     await this.prisma.room.update({
       where: { slug },
       data: {
         canvas: normalized as unknown as object,
+        canvasHistory: limitedHistory as unknown as object,
       },
     });
 
@@ -158,6 +166,8 @@ export class RoomsService {
       createdBy: dbRoom.createdBy as unknown as RoomParticipant,
       canvas: dbRoom.canvas as unknown as RoomCanvasState,
       diceLogs: (dbRoom.diceLogs as unknown as DiceRollLog[]) ?? [],
+      canvasHistory: (dbRoom.canvasHistory as unknown as RoomCanvasState[]) ?? [],
+      chatMessages: (dbRoom.chatMessages as unknown as ChatMessage[]) ?? [],
     };
 
     return room;
@@ -172,6 +182,8 @@ export class RoomsService {
       createdBy: room.createdBy,
       canvas: room.canvas,
       diceLogs: room.diceLogs ?? [],
+      canvasHistory: room.canvasHistory ?? [],
+      chatMessages: room.chatMessages ?? [],
     };
   }
 
@@ -227,14 +239,16 @@ export class RoomsService {
   }
 
   private resolveParticipant(
-    user?: AuthenticatedRequestUser,
-    guestName?: string,
+    user: AuthenticatedRequestUser | undefined,
+    guestName: string | undefined,
+    role: RoomParticipant['role'],
   ): RoomParticipant {
     if (user) {
       return {
         id: `user:${user.id}`,
         displayName: user.displayName,
         kind: 'registered',
+        role,
         userId: user.id,
       };
     }
@@ -251,6 +265,7 @@ export class RoomsService {
       id: `guest:${randomUUID()}`,
       displayName: normalizedGuestName,
       kind: 'guest',
+      role,
     };
   }
 

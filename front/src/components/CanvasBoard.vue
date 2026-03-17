@@ -1,18 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { RoomCanvas, Stroke, Token } from '../types';
 
 const props = defineProps<{
   modelValue: RoomCanvas;
   participantId: string;
+  canEdit?: boolean;
 }>();
 
 const emit = defineEmits<{
   'update:modelValue': [value: RoomCanvas];
 }>();
 
-const WIDTH = 960;
-const HEIGHT = 600;
+const GRID_STEP = 40;
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 4;
@@ -20,6 +20,7 @@ const ZOOM_STEP = 0.15;
 
 const boardRef = ref<HTMLDivElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
+const viewportSize = ref({ width: 960, height: 600 });
 const localCanvas = ref<RoomCanvas>(cloneCanvas(props.modelValue));
 const brushColor = ref('#111827');
 const brushWidth = ref(4);
@@ -42,11 +43,31 @@ watch(
   { deep: true, immediate: true },
 );
 
-watch([brushColor, brushWidth], () => {
+watch([brushColor, brushWidth, viewportSize, pan, zoom], () => {
   renderCanvas();
 });
 
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  const el = boardRef.value;
+  if (!el) return;
+  resizeObserver = new ResizeObserver((entries) => {
+    const { width, height } = entries[0]?.contentRect ?? { width: 960, height: 600 };
+    viewportSize.value = { width: Math.max(1, width), height: Math.max(1, height) };
+    nextTick(() => renderCanvas());
+  });
+  resizeObserver.observe(el);
+});
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
+  activeStroke = null;
+  activeTokenId = null;
+});
+
 function toggleGrid() {
+  if (props.canEdit === false) return;
   updateCanvas({
     ...localCanvas.value,
     gridEnabled: !localCanvas.value.gridEnabled,
@@ -54,6 +75,7 @@ function toggleGrid() {
 }
 
 function clearBoard() {
+  if (props.canEdit === false) return;
   updateCanvas({
     ...localCanvas.value,
     strokes: [],
@@ -61,12 +83,17 @@ function clearBoard() {
 }
 
 function addToken() {
+  if (props.canEdit === false) return;
+  const rect = boardRef.value?.getBoundingClientRect();
+  const cx = rect ? (rect.width / 2 - pan.value.x) / zoom.value : 120;
+  const cy = rect ? (rect.height / 2 - pan.value.y) / zoom.value : 120;
+
   const newToken: Token = {
     id: crypto.randomUUID(),
     label: `T${localCanvas.value.tokens.length + 1}`,
     color: '#dc2626',
-    x: 120 + localCanvas.value.tokens.length * 20,
-    y: 120 + localCanvas.value.tokens.length * 20,
+    x: cx + localCanvas.value.tokens.length * 20,
+    y: cy + localCanvas.value.tokens.length * 20,
     size: 42,
   };
 
@@ -80,6 +107,7 @@ function startDrawing(event: PointerEvent) {
   if (activeTokenId || isPanning) {
     return;
   }
+  if (props.canEdit === false) return;
 
   const point = getRelativePoint(event);
   activeStroke = {
@@ -222,12 +250,16 @@ function handlePointerDown(event: PointerEvent) {
   if (event.button === 1 || event.button === 2) {
     startPointerDown(event);
   } else if (event.button === 0 && !activeTokenId) {
+    if (props.canEdit === false) return;
     startDrawing(event);
   }
 }
 
 function handlePointerMove(event: PointerEvent) {
   if (handlePanMove(event)) return;
+  if (props.canEdit === false && !activeTokenId) {
+    return;
+  }
   if (activeTokenId) {
     const point = getRelativePoint(event);
 
@@ -274,33 +306,48 @@ function renderCanvas() {
     return;
   }
 
-  context.clearRect(0, 0, WIDTH, HEIGHT);
+  const { width, height } = viewportSize.value;
+
+  context.save();
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  context.setTransform(zoom.value, 0, 0, zoom.value, pan.value.x, pan.value.y);
+
+  const worldLeft = -pan.value.x / zoom.value;
+  const worldTop = -pan.value.y / zoom.value;
+  const worldRight = (width - pan.value.x) / zoom.value;
+  const worldBottom = (height - pan.value.y) / zoom.value;
+
   context.fillStyle = localCanvas.value.backgroundColor;
-  context.fillRect(0, 0, WIDTH, HEIGHT);
+  context.fillRect(worldLeft - 1, worldTop - 1, worldRight - worldLeft + 2, worldBottom - worldTop + 2);
 
   if (localCanvas.value.gridEnabled) {
     context.strokeStyle = 'rgba(15, 23, 42, 0.08)';
-    context.lineWidth = 1;
+    context.lineWidth = 1 / zoom.value;
 
-    for (let x = 0; x <= WIDTH; x += 40) {
+    const gridStartX = Math.floor(worldLeft / GRID_STEP) * GRID_STEP;
+    const gridEndX = Math.ceil(worldRight / GRID_STEP) * GRID_STEP;
+    const gridStartY = Math.floor(worldTop / GRID_STEP) * GRID_STEP;
+    const gridEndY = Math.ceil(worldBottom / GRID_STEP) * GRID_STEP;
+
+    for (let x = gridStartX; x <= gridEndX; x += GRID_STEP) {
       context.beginPath();
-      context.moveTo(x, 0);
-      context.lineTo(x, HEIGHT);
+      context.moveTo(x, worldTop - 1);
+      context.lineTo(x, worldBottom + 1);
       context.stroke();
     }
 
-    for (let y = 0; y <= HEIGHT; y += 40) {
+    for (let y = gridStartY; y <= gridEndY; y += GRID_STEP) {
       context.beginPath();
-      context.moveTo(0, y);
-      context.lineTo(WIDTH, y);
+      context.moveTo(worldLeft - 1, y);
+      context.lineTo(worldRight + 1, y);
       context.stroke();
     }
   }
 
   for (const stroke of localCanvas.value.strokes) {
-    if (stroke.points.length === 0) {
-      continue;
-    }
+    if (stroke.points.length === 0) continue;
 
     context.beginPath();
     context.strokeStyle = stroke.color;
@@ -309,32 +356,24 @@ function renderCanvas() {
     context.lineJoin = 'round';
 
     stroke.points.forEach((point, index) => {
-      if (index === 0) {
-        context.moveTo(point.x, point.y);
-      } else {
-        context.lineTo(point.x, point.y);
-      }
+      if (index === 0) context.moveTo(point.x, point.y);
+      else context.lineTo(point.x, point.y);
     });
-
     context.stroke();
   }
+
+  context.restore();
 }
 
 function getRelativePoint(event: PointerEvent) {
   const rect = boardRef.value?.getBoundingClientRect();
-
-  if (!rect) {
-    return { x: 0, y: 0 };
-  }
+  if (!rect) return { x: 0, y: 0 };
 
   const viewX = event.clientX - rect.left;
   const viewY = event.clientY - rect.top;
-  const contentX = (viewX - pan.value.x) / zoom.value;
-  const contentY = (viewY - pan.value.y) / zoom.value;
-
   return {
-    x: Math.max(0, Math.min(WIDTH, contentX)),
-    y: Math.max(0, Math.min(HEIGHT, contentY)),
+    x: (viewX - pan.value.x) / zoom.value,
+    y: (viewY - pan.value.y) / zoom.value,
   };
 }
 
@@ -350,19 +389,12 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
   };
 }
 
-const viewportStyle = computed(() => ({
-  transform: `translate(${pan.value.x}px, ${pan.value.y}px) scale(${zoom.value})`,
-  transformOrigin: '0 0',
-  width: `${WIDTH}px`,
-  height: `${HEIGHT}px`,
-}));
-
 const tokenStyle = computed(() =>
   localCanvas.value.tokens.map((token) => ({
     ...token,
     style: {
-      left: `${token.x - token.size / 2}px`,
-      top: `${token.y - token.size / 2}px`,
+      left: `${pan.value.x + token.x * zoom.value - token.size / 2}px`,
+      top: `${pan.value.y + token.y * zoom.value - token.size / 2}px`,
       width: `${token.size}px`,
       height: `${token.size}px`,
       backgroundColor: token.color,
@@ -370,10 +402,6 @@ const tokenStyle = computed(() =>
   })),
 );
 
-onBeforeUnmount(() => {
-  activeStroke = null;
-  activeTokenId = null;
-});
 </script>
 
 <template>
@@ -408,7 +436,7 @@ onBeforeUnmount(() => {
     <div
       ref="boardRef"
       class="board-surface"
-      title="Колёсико: zoom • Средняя/ПКМ: перетаскивание"
+      title="Колёсико: zoom • Средняя/ПКМ: перетаскивание (бесконечный холст)"
       @pointerdown="handlePointerDown"
       @pointermove="handlePointerMove"
       @pointerup="handlePointerUp"
@@ -416,20 +444,22 @@ onBeforeUnmount(() => {
       @wheel.prevent="handleWheel"
       @contextmenu.prevent
     >
-      <div class="board-viewport" :style="viewportStyle">
-        <canvas ref="canvasRef" :width="WIDTH" :height="HEIGHT" class="battle-canvas" />
-
-        <button
-          v-for="token in tokenStyle"
-          :key="token.id"
-          class="token-chip"
-          :style="token.style"
-          type="button"
-          @pointerdown="startTokenDrag(token.id, $event)"
-        >
-          {{ token.label }}
-        </button>
-      </div>
+      <canvas
+        ref="canvasRef"
+        class="battle-canvas"
+        :width="viewportSize.width"
+        :height="viewportSize.height"
+      />
+      <button
+        v-for="token in tokenStyle"
+        :key="token.id"
+        class="token-chip"
+        :style="token.style"
+        type="button"
+        @pointerdown="startTokenDrag(token.id, $event)"
+      >
+        {{ token.label }}
+      </button>
     </div>
   </section>
 </template>

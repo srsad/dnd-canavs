@@ -2,6 +2,7 @@ export type RoomParticipant = {
   id: string;
   displayName: string;
   kind: 'registered' | 'guest';
+  role: 'gm' | 'player';
   userId?: string;
 };
 
@@ -34,6 +35,14 @@ export type RoomCanvasState = {
   tokens: CanvasToken[];
 };
 
+export type ChatMessage = {
+  id: string;
+  participantId: string;
+  participantDisplayName: string;
+  text: string;
+  createdAt: string;
+};
+
 export type DiceRollLog = {
   id: string;
   participantId: string;
@@ -53,6 +62,8 @@ export type RoomRecord = {
   createdBy: RoomParticipant;
   canvas: RoomCanvasState;
   diceLogs: DiceRollLog[];
+  canvasHistory: RoomCanvasState[];
+  chatMessages: ChatMessage[];
 };
 
 export type RoomSession = {
