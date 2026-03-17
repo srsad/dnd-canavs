@@ -44,9 +44,12 @@ cp .env.example .env
 # Отредактируйте .env: JWT_SECRET, FRONTEND_URL (публичный URL)
 
 docker compose up -d
+# или npm start — для PaaS (foreground)
 ```
 
 Приложение будет на `http://localhost` (порт 80, задаётся через `PORT` в `.env`). Nginx раздаёт статику фронтенда и проксирует API и WebSocket на бэкенд.
+
+**Деплой на PaaS** (Railway, Render и т.п.): см. [DEPLOY.md](DEPLOY.md) — команды сборки/запуска, переменные окружения.
 
 ### Вариант 3: Локальный запуск (разработка)
 
