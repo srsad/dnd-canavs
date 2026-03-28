@@ -45,4 +45,4 @@ EXPOSE 3000
 
 # Применяем схему БД и запускаем приложение
 # Используйте prisma migrate deploy вместо db push, если есть миграции
-CMD ["sh", "-c", "npx prisma db push && node dist/main.js"]
+CMD ["sh", "-c", "npx prisma db push && node dist/src/main.js"]
