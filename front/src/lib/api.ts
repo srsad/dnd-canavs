@@ -1,6 +1,11 @@
-const API_URL =
-  import.meta.env.VITE_API_URL ??
-  (import.meta.env.DEV ? '/api' : 'http://localhost:3000');
+/** Same-origin в prod (nginx проксирует /auth, /rooms); в dev — Vite proxy. */
+function resolveApiBase(): string {
+  const fromEnv = import.meta.env.VITE_API_URL;
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv;
+  return import.meta.env.DEV ? '/api' : '';
+}
+
+const API_URL = resolveApiBase();
 
 type RequestOptions = {
   method?: 'GET' | 'POST';
