@@ -7,6 +7,9 @@ services:
     image: postgres:16
     container_name: dnd-canvas-db
     restart: unless-stopped
+    ports:
+      # Чтобы с хоста работал npm run dev:back с DATABASE_URL=...@localhost:5432
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -25,6 +28,9 @@ services:
       dockerfile: Dockerfile
     container_name: dnd-canvas-back
     restart: unless-stopped
+    # Чтобы с хоста работал Vite (прокси на 127.0.0.1:3000). На проде при желании закройте 3000 файрволом.
+    ports:
+      - "127.0.0.1:3000:3000"
     environment:
       PORT: 3000
       DATABASE_URL: postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-dnd_canvas}

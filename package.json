@@ -3,12 +3,19 @@
   "private": true,
   "version": "1.0.0",
   "scripts": {
+    "dev": "concurrently -n back,front -c blue,magenta \"npm run dev:back\" \"npm run dev:front\"",
     "dev:back": "npm --prefix back run start:dev",
     "dev:front": "npm --prefix front run dev",
     "build": "npm --prefix back run build && npm --prefix front run build",
     "test:back": "npm --prefix back run test",
+    "test:front": "npm --prefix front run test",
     "docker:build": "docker compose build",
+    "docker:dev": "docker compose up -d --build db back",
+    "docker:dev:down": "docker compose stop db back",
     "docker:start": "docker compose up --build",
     "start": "docker compose up --build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }
