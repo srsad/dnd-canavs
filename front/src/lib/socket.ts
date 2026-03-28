@@ -8,13 +8,33 @@ function resolveSocketBase(): string {
 
 const SOCKET_URL = resolveSocketBase();
 
-export function createRoomSocket(roomSlug: string, sessionId: string): Socket {
+export type RoomSocketAuth = {
+  roomSlug: string;
+  sessionId: string;
+};
+
+/**
+ * Auth is resolved on every Engine.IO handshake so reconnects always send the
+ * current sessionId from the store (not a stale closure).
+ */
+export function createRoomSocket(getAuth: () => RoomSocketAuth | null): Socket {
   const url = SOCKET_URL ? `${SOCKET_URL}/rooms` : '/rooms';
   return io(url, {
     transports: ['websocket'],
-    auth: {
-      roomSlug,
-      sessionId,
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 10000,
+    auth: (cb) => {
+      const auth = getAuth();
+      if (!auth?.roomSlug || !auth?.sessionId) {
+        cb({});
+        return;
+      }
+      cb({
+        roomSlug: auth.roomSlug,
+        sessionId: auth.sessionId,
+      });
     },
   });
 }

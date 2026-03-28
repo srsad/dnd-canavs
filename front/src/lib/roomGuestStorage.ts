@@ -9,13 +9,32 @@ function key(slug: string) {
   return `dnd-room-guest:${slug}`;
 }
 
+function browserStorage(): Storage | null {
+  try {
+    if (typeof globalThis.localStorage === 'undefined') {
+      return null;
+    }
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function saveRoomGuestSnapshot(slug: string, data: RoomGuestSnapshot) {
-  localStorage.setItem(key(slug), JSON.stringify(data));
+  const store = browserStorage();
+  if (!store) {
+    return;
+  }
+  store.setItem(key(slug), JSON.stringify(data));
 }
 
 export function loadRoomGuestSnapshot(slug: string): RoomGuestSnapshot | null {
+  const store = browserStorage();
+  if (!store) {
+    return null;
+  }
   try {
-    const raw = localStorage.getItem(key(slug));
+    const raw = store.getItem(key(slug));
     if (!raw) {
       return null;
     }

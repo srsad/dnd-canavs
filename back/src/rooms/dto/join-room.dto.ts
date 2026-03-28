@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { Allow, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class JoinRoomDto {
   @IsOptional()
@@ -6,11 +6,13 @@ export class JoinRoomDto {
   @MinLength(2)
   guestName?: string;
 
+  @Allow()
   @IsOptional()
-  @IsUUID('4')
+  @IsString()
   guestKey?: string;
 
   /** Guest GM reconnect secret (shown once at room creation) */
+  @Allow()
   @IsOptional()
   @IsString()
   @MinLength(32)

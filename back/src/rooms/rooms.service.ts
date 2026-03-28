@@ -24,6 +24,12 @@ import {
 export class RoomsService {
   private readonly sessions = new Map<string, RoomSession>();
 
+  /** Sockets to disconnect after HTTP replaced their session (evict). */
+  private readonly staleSocketsToKick: Array<{
+    socketId: string;
+    roomSlug: string;
+  }> = [];
+
   private readonly sessionTtlMs =
     (Number(process.env.SESSION_TTL_MINUTES) > 0
       ? Number(process.env.SESSION_TTL_MINUTES)
@@ -85,6 +91,11 @@ export class RoomsService {
     });
 
     const session = this.createSession(slug, creator);
+    this.evictOtherSessionsForRoomParticipant(
+      slug,
+      creator.id,
+      session.sessionId,
+    );
 
     return {
       room: this.serializeRoom(room),
@@ -124,6 +135,11 @@ export class RoomsService {
       }
       const participant: RoomParticipant = { ...room.createdBy };
       const session = this.createSession(input.slug, participant);
+      this.evictOtherSessionsForRoomParticipant(
+        input.slug,
+        participant.id,
+        session.sessionId,
+      );
 
       return {
         room: this.serializeRoom(room),
@@ -157,6 +173,14 @@ export class RoomsService {
     }
 
     const session = this.createSession(input.slug, participant);
+
+    if (participant.id === room.createdBy.id) {
+      this.evictOtherSessionsForRoomParticipant(
+        input.slug,
+        participant.id,
+        session.sessionId,
+      );
+    }
 
     return {
       room: this.serializeRoom(room),
@@ -221,14 +245,56 @@ export class RoomsService {
     return room.canvasHistory ?? [];
   }
 
-  markSocketDisconnected(sessionId: string) {
+  takeStaleSocketsToKick(): Array<{ socketId: string; roomSlug: string }> {
+    const out = [...this.staleSocketsToKick];
+    this.staleSocketsToKick.length = 0;
+    return out;
+  }
+
+  /** One GM session per room: remove older sessions (and queue their sockets for kick). */
+  private evictOtherSessionsForRoomParticipant(
+    roomSlug: string,
+    participantId: string,
+    keepSessionId: string,
+  ) {
+    for (const [id, sess] of this.sessions) {
+      if (id === keepSessionId) {
+        continue;
+      }
+      if (sess.roomSlug === roomSlug && sess.participant.id === participantId) {
+        if (sess.socketId) {
+          this.staleSocketsToKick.push({
+            socketId: sess.socketId,
+            roomSlug: sess.roomSlug,
+          });
+        }
+        this.sessions.delete(id);
+      }
+    }
+  }
+
+  /**
+   * Marks the session offline only if this disconnect belongs to the socket
+   * currently bound to the session. Ignores stale disconnects from a previous
+   * socket we already replaced (e.g. forced disconnect on reconnect / second tab).
+   *
+   * @returns whether presence actually changed
+   */
+  markSocketDisconnected(sessionId: string, disconnectingSocketId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
-      return;
+      return false;
+    }
+    if (
+      session.socketId !== undefined &&
+      session.socketId !== disconnectingSocketId
+    ) {
+      return false;
     }
     session.connected = false;
     session.disconnectedAt = new Date().toISOString();
     session.socketId = undefined;
+    return true;
   }
 
   /**

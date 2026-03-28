@@ -184,7 +184,14 @@ export const useRoomStore = defineStore('room', () => {
 
     disconnectRealtime();
 
-    const nextSocket = createRoomSocket(room.value.slug, sessionId.value);
+    const nextSocket = createRoomSocket(() => {
+      const slug = room.value?.slug;
+      const sid = sessionId.value;
+      if (!slug || !sid) {
+        return null;
+      }
+      return { roomSlug: slug, sessionId: sid };
+    });
 
     nextSocket.on('room_state', (payload: { room: Room; participants: Participant[] }) => {
       room.value = payload.room;

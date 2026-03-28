@@ -4,7 +4,8 @@ import { useRoomStore } from '../stores/room';
 
 /**
  * Нужен запущенный бэкенд (например `npm run docker:dev` или `npm run dev:back`).
- * База: VITE_TEST_API_URL (по умолчанию http://127.0.0.1:3000)
+ * API: VITE_TEST_API_URL (по умолчанию http://127.0.0.1:3000).
+ * Тело как у гостя в UI: guestName + guestKey (требует актуальный DTO с полем guestKey).
  */
 describe('create room (integration)', () => {
   beforeEach(() => {
@@ -16,6 +17,7 @@ describe('create room (integration)', () => {
     const slug = await store.createRoom({
       title: 'Vitest комната',
       guestName: 'GM',
+      guestKey: crypto.randomUUID(),
     });
 
     expect(slug).toMatch(/^[a-z0-9-]+$/);

@@ -28,6 +28,32 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(private readonly roomsService: RoomsService) {}
 
+  /** Call after REST create/join when evict replaced another session for the same participant. */
+  async disconnectStaleSockets() {
+    const items = this.roomsService.takeStaleSocketsToKick();
+    if (items.length === 0) {
+      return;
+    }
+    const remoteSockets = await this.server.fetchSockets();
+    const roomSlugs = new Set<string>();
+    for (const { socketId, roomSlug } of items) {
+      const stale = remoteSockets.find((s) => s.id === socketId);
+      await stale?.disconnect(true);
+      roomSlugs.add(roomSlug);
+    }
+    for (const roomSlug of roomSlugs) {
+      const roomData = await this.roomsService
+        .getRoomBySlug(roomSlug)
+        .catch(() => undefined);
+      this.server.to(roomSlug).emit('presence_updated', {
+        participants: this.roomsService.listParticipants(
+          roomSlug,
+          roomData?.room.createdBy,
+        ),
+      });
+    }
+  }
+
   async handleConnection(client: RoomSocket) {
     const roomSlug = this.readHandshakeValue(client, 'roomSlug');
     const sessionId = this.readHandshakeValue(client, 'sessionId');
@@ -75,7 +101,14 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    this.roomsService.markSocketDisconnected(sessionId);
+    const presenceChanged = this.roomsService.markSocketDisconnected(
+      sessionId,
+      client.id,
+    );
+    if (!presenceChanged) {
+      return;
+    }
+
     const roomData = await this.roomsService.getRoomBySlug(roomSlug).catch(() => undefined);
 
     this.server.to(roomSlug).emit('presence_updated', {

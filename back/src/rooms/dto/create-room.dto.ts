@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { Allow, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class CreateRoomDto {
   @IsString()
@@ -10,8 +10,12 @@ export class CreateRoomDto {
   @MinLength(2)
   guestName?: string;
 
-  /** Stable guest identity (UUID v4); omit to let server assign */
+  /**
+   * Stable guest identity (UUID v4); omit to let server assign.
+   * @Allow() keeps this on the whitelist with forbidNonWhitelisted + transform.
+   */
+  @Allow()
   @IsOptional()
-  @IsUUID('4')
+  @IsString()
   guestKey?: string;
 }

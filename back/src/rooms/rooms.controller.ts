@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { RoomsGateway } from './rooms.gateway';
 import { RoomsService } from './rooms.service';
 import { OptionalAuthGuard } from '../auth/optional-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -9,19 +10,24 @@ import { JoinRoomDto } from './dto/join-room.dto';
 @Controller('rooms')
 @UseGuards(OptionalAuthGuard)
 export class RoomsController {
-  constructor(private readonly roomsService: RoomsService) {}
+  constructor(
+    private readonly roomsService: RoomsService,
+    private readonly roomsGateway: RoomsGateway,
+  ) {}
 
   @Post()
-  createRoom(
+  async createRoom(
     @Body() dto: CreateRoomDto,
     @CurrentUser() user?: AuthenticatedRequestUser,
   ) {
-    return this.roomsService.createRoom({
+    const result = await this.roomsService.createRoom({
       title: dto.title,
       guestName: dto.guestName,
-      guestKey: dto.guestKey,
+      guestKey: dto.guestKey ?? window.crypto.randomUUID(),
       user,
     });
+    await this.roomsGateway.disconnectStaleSockets();
+    return result;
   }
 
   @Get(':slug')
@@ -35,17 +41,19 @@ export class RoomsController {
   }
 
   @Post(':slug/join')
-  joinRoom(
+  async joinRoom(
     @Param('slug') slug: string,
     @Body() dto: JoinRoomDto,
     @CurrentUser() user?: AuthenticatedRequestUser,
   ) {
-    return this.roomsService.joinRoom({
+    const result = await this.roomsService.joinRoom({
       slug,
       guestName: dto.guestName,
       guestKey: dto.guestKey,
       hostSecret: dto.hostSecret,
       user,
     });
+    await this.roomsGateway.disconnectStaleSockets();
+    return result;
   }
 }
