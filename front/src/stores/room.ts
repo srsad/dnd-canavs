@@ -239,6 +239,13 @@ export const useRoomStore = defineStore('room', () => {
     socket.value?.emit('chat:send', { text });
   }
 
+  function moveTokens(moves: Array<{ id: string; x: number; y: number }>) {
+    if (!moves.length || !socket.value?.connected) {
+      return;
+    }
+    socket.value.emit('tokens:move', { moves });
+  }
+
   function replaceCanvas(canvas: RoomCanvas) {
     if (!room.value) {
       return;
@@ -304,6 +311,7 @@ export const useRoomStore = defineStore('room', () => {
     reset,
     rollDice,
     sendChat,
+    moveTokens,
     room,
     sessionId,
     socket,

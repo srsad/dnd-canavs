@@ -1,15 +1,27 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { CanvasLayer, RoomCanvas, Stroke, StrokePoint, Token } from '../types';
+import type {
+  CanvasLayer,
+  Participant,
+  RoomCanvas,
+  Stroke,
+  StrokePoint,
+  Token,
+} from '../types';
 
-const props = defineProps<{
-  modelValue: RoomCanvas;
-  participantId: string;
-  canEdit?: boolean;
-}>();
+const props = withDefaults(
+  defineProps<{
+    modelValue: RoomCanvas;
+    participantId: string;
+    canEdit?: boolean;
+    participants?: Participant[];
+  }>(),
+  { participants: () => [] },
+);
 
 const emit = defineEmits<{
   'update:modelValue': [value: RoomCanvas];
+  commitTokenMoves: [moves: Array<{ id: string; x: number; y: number }>];
 }>();
 
 const GRID_STEP = 40;
@@ -38,6 +50,15 @@ let activeFogStroke: { id: string; width: number; points: StrokePoint[]; authorI
 
 const activeLayerId = ref<string>('');
 const toolMode = ref<'draw' | 'fog'>('draw');
+const assignTokenId = ref('');
+const assignParticipantValue = ref('');
+
+function canDragToken(token: Token): boolean {
+  if (props.canEdit !== false) {
+    return true;
+  }
+  return token.controlledByParticipantId === props.participantId;
+}
 
 watch(
   () => props.modelValue,
@@ -52,6 +73,29 @@ watch(
 
 watch([brushColor, brushWidth, viewportSize, pan, zoom], () => {
   renderCanvas();
+});
+
+watch(
+  () => localCanvas.value.tokens.map((t) => t.id),
+  (ids) => {
+    if (!ids.length) {
+      assignTokenId.value = '';
+      return;
+    }
+    if (!assignTokenId.value || !ids.includes(assignTokenId.value)) {
+      assignTokenId.value = ids[0] ?? '';
+    }
+  },
+  { immediate: true },
+);
+
+watch(assignTokenId, (tid) => {
+  if (!tid) {
+    assignParticipantValue.value = '';
+    return;
+  }
+  const t = localCanvas.value.tokens.find((x) => x.id === tid);
+  assignParticipantValue.value = t?.controlledByParticipantId ?? '';
 });
 
 let resizeObserver: ResizeObserver | null = null;
@@ -318,7 +362,10 @@ function resetView() {
 
 function startTokenDrag(tokenId: string, event: PointerEvent) {
   event.stopPropagation();
-  if (props.canEdit === false) return;
+  const token = localCanvas.value.tokens.find((t) => t.id === tokenId);
+  if (!token || !canDragToken(token)) {
+    return;
+  }
   activeTokenId = tokenId;
 }
 
@@ -363,12 +410,36 @@ function handlePointerMove(event: PointerEvent) {
 
 function finishInteraction() {
   if (activeTokenId) {
-    updateCanvas(localCanvas.value);
+    const id = activeTokenId;
+    const token = localCanvas.value.tokens.find((t) => t.id === id);
+    if (token && props.canEdit === false) {
+      emit('commitTokenMoves', [{ id, x: token.x, y: token.y }]);
+    } else {
+      updateCanvas(localCanvas.value);
+    }
     activeTokenId = null;
   }
 
   finishFogErase();
   finishDrawing();
+}
+
+function applyTokenControl() {
+  if (props.canEdit === false || !assignTokenId.value) {
+    return;
+  }
+  const pid = assignParticipantValue.value.trim();
+  updateCanvas({
+    ...localCanvas.value,
+    tokens: localCanvas.value.tokens.map((t) =>
+      t.id === assignTokenId.value
+        ? {
+            ...t,
+            controlledByParticipantId: pid || undefined,
+          }
+        : t,
+    ),
+  });
 }
 
 function updateCanvas(value: RoomCanvas) {
@@ -525,7 +596,10 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
   return {
     backgroundColor: value.backgroundColor,
     gridEnabled: value.gridEnabled,
-    tokens: value.tokens.map((token) => ({ ...token })),
+    tokens: value.tokens.map((token) => ({
+      ...token,
+      controlledByParticipantId: token.controlledByParticipantId,
+    })),
     layers: normalizedLayers,
     fogEnabled: Boolean(value.fogEnabled),
     fogStrokes: Array.isArray(value.fogStrokes)
@@ -668,6 +742,31 @@ function toggleFog() {
           <button class="ghost-button zoom-btn" type="button" title="Отдалить" @click="zoomOut">−</button>
           <button class="ghost-button zoom-btn" type="button" title="Сбросить вид" @click="resetView">⟲</button>
         </div>
+
+        <template v-if="canEdit !== false && localCanvas.tokens.length">
+          <div class="toolbar-group token-assign-row">
+            <label class="field compact">
+              <span>Кому фишка</span>
+              <select v-model="assignTokenId">
+                <option v-for="t in localCanvas.tokens" :key="t.id" :value="t.id">
+                  {{ t.label }}
+                </option>
+              </select>
+            </label>
+            <label class="field compact">
+              <span>Управление</span>
+              <select v-model="assignParticipantValue">
+                <option value="">Только мастер</option>
+                <option v-for="p in participants" :key="p.id" :value="p.id">
+                  {{ p.displayName }}{{ p.role === 'gm' ? ' (мастер)' : '' }}
+                </option>
+              </select>
+            </label>
+            <button class="ghost-button" type="button" @click="applyTokenControl">
+              Назначить
+            </button>
+          </div>
+        </template>
 
         <template v-if="canEdit !== false">
           <button class="ghost-button" type="button" @click="toggleGrid">

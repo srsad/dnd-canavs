@@ -216,6 +216,67 @@ export class RoomsService {
     return normalized;
   }
 
+  /**
+   * Updates token positions without appending `canvasHistory` (unlike full `canvas:replace`).
+   * Players may only move tokens assigned to them via `controlledByParticipantId`.
+   */
+  async applyTokenMoves(
+    slug: string,
+    participant: RoomParticipant,
+    moves: Array<{ id: string; x: number; y: number }>,
+  ): Promise<RoomCanvasState> {
+    if (!Array.isArray(moves) || moves.length === 0) {
+      const room = await this.findRoomOrThrow(slug);
+      return this.normalizeCanvas(room.canvas as unknown as RoomCanvasState);
+    }
+
+    const room = await this.findRoomOrThrow(slug);
+    const canvas = this.normalizeCanvas(room.canvas as unknown as RoomCanvasState);
+    const isGm = participant.role === 'gm';
+
+    const allowed = new Map<string, { x: number; y: number }>();
+    for (const raw of moves) {
+      const id = typeof raw.id === 'string' ? raw.id : '';
+      if (!id) continue;
+      const token = canvas.tokens.find((t) => t.id === id);
+      if (!token) continue;
+      if (isGm) {
+        allowed.set(id, {
+          x: Number(raw.x) || 0,
+          y: Number(raw.y) || 0,
+        });
+        continue;
+      }
+      if (token.controlledByParticipantId === participant.id) {
+        allowed.set(id, {
+          x: Number(raw.x) || 0,
+          y: Number(raw.y) || 0,
+        });
+      }
+    }
+
+    if (allowed.size === 0) {
+      return canvas;
+    }
+
+    const nextTokens = canvas.tokens.map((token) => {
+      const pos = allowed.get(token.id);
+      if (!pos) return token;
+      return { ...token, x: pos.x, y: pos.y };
+    });
+
+    const nextCanvas: RoomCanvasState = { ...canvas, tokens: nextTokens };
+
+    await this.prisma.room.update({
+      where: { slug },
+      data: {
+        canvas: nextCanvas as unknown as object,
+      },
+    });
+
+    return nextCanvas;
+  }
+
   async validateSession(sessionId: string, roomSlug: string) {
     this.pruneStaleSessions();
 
@@ -731,14 +792,23 @@ export class RoomsService {
       backgroundColor: canvas.backgroundColor || '#f8f1df',
       gridEnabled: Boolean(canvas.gridEnabled),
       tokens: Array.isArray(canvas.tokens)
-        ? canvas.tokens.map((token) => ({
-            id: token.id || randomUUID(),
-            label: token.label || 'Token',
-            color: token.color || '#2563eb',
-            x: Number(token.x) || 0,
-            y: Number(token.y) || 0,
-            size: Number(token.size) || 40,
-          }))
+        ? canvas.tokens.map((token) => {
+            const rawCtrl = (token as { controlledByParticipantId?: unknown })
+              .controlledByParticipantId;
+            const controlledByParticipantId =
+              typeof rawCtrl === 'string' && rawCtrl.trim() ? rawCtrl.trim() : undefined;
+            return {
+              id: token.id || randomUUID(),
+              label: token.label || 'Token',
+              color: token.color || '#2563eb',
+              x: Number(token.x) || 0,
+              y: Number(token.y) || 0,
+              size: Number(token.size) || 40,
+              ...(controlledByParticipantId !== undefined
+                ? { controlledByParticipantId }
+                : {}),
+            };
+          })
         : [],
       layers,
       fogEnabled: Boolean((canvas as unknown as { fogEnabled?: unknown }).fogEnabled),

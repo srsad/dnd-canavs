@@ -33,6 +33,8 @@ export type CanvasToken = {
   x: number;
   y: number;
   size: number;
+  /** If set, this participant (and GM) may move the token via `tokens:move`. */
+  controlledByParticipantId?: string | null;
 };
 
 export type CanvasLayer = {

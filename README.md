@@ -102,6 +102,7 @@ npm --prefix front run dev
 - `GET /auth/me`
 - `POST /rooms`
 - `GET /rooms/:slug`
+- `GET /rooms/:slug/canvas-history`
 - `POST /rooms/:slug/join`
 
 WebSocket namespace:
@@ -110,22 +111,19 @@ WebSocket namespace:
 
 События:
 
-- client -> `canvas:replace`
-- server -> `room_state`
-- server -> `presence_updated`
-- server -> `canvas_updated`
+- client → `canvas:replace` (только GM), `tokens:move` (GM или игрок по своим фишкам), `chat:send`, `dice:roll`, `presence:ui`
+- server → `room_state`, `presence_updated`, `canvas_updated`, `chat:message`, `dice_log_added`
 
 ## Ограничения MVP
 
-- сессии комнаты живут в памяти сервера
-- права доступа, роли GM и история изменений пока не реализованы
+- сессии комнаты живут в памяти сервера (переподключение — новая сессия через `join`)
+- нет отдельной ACL кроме ролей `gm` / `player` и назначения фишек
+- нет экспорта/импорта комнат и долгосрочного аудита действий
 
 ## Следующие шаги
 
-- разделить роли `GM` и `Player` **(частично сделано)**: роли добавлены на backend/frontend, GM может редактировать холст, игроки — только смотреть; осталось продумать более тонкие права (например, кто может двигать фишки).
-- сделать слои карты, туман войны и чат **(в работе)**:
-  - слои карты и слой тумана войны ещё не реализованы в структуре холста и `CanvasBoard`;
-  - чат: добавлены поля и типы (`chatMessages`), но ещё нет WebSocket-событий и компонента `ChatPanel` на фронтенде.
-- хранить и воспроизводить историю ходов на холсте **(MVP реализован на сервере)**:
-  - backend сохраняет до 50 предыдущих состояний холста (`canvasHistory`) при каждом `canvas:replace`;
-  - на фронтенде пока нет UI (`CanvasHistoryPanel`) и эндпоинта/события для загрузки и проигрывания истории.
+- **Роли и фишки:** мастер правит холстом (`canvas:replace`); игроки двигают только фишки, назначенные им полем `controlledByParticipantId` (WebSocket `tokens:move`). Дальше — опционально «своя фишка», сетка привязки, undo.
+- **Слои, туман, чат:** в структуре `RoomCanvas` и в `CanvasBoard` есть слои и туман; чат — `chat:send` / `chat:message`, UI — `ChatPanel`.
+- **История холста:** до 50 снимков в `canvasHistory` при полной замене холста мастером; `GET /rooms/:slug/canvas-history`, просмотр и откат — `CanvasHistoryPanel` (мастер может «Применить выбранный»).
+
+Идеи на потом: постоянное хранение сессий, роли вне владельца комнаты, общий чат с упоминаниями, запись сессии.

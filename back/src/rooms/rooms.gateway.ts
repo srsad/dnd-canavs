@@ -148,6 +148,39 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
+  @SubscribeMessage('tokens:move')
+  async moveTokens(
+    @ConnectedSocket() client: RoomSocket,
+    @MessageBody() body: { moves?: Array<{ id: string; x: number; y: number }> },
+  ) {
+    const roomSlug = client.data.roomSlug;
+    const sessionId = client.data.sessionId;
+
+    if (!roomSlug || !sessionId) {
+      return;
+    }
+
+    const moves = Array.isArray(body?.moves) ? body.moves : [];
+
+    try {
+      const { session } = await this.roomsService.validateSession(
+        sessionId,
+        roomSlug,
+      );
+      const canvas = await this.roomsService.applyTokenMoves(
+        roomSlug,
+        session.participant,
+        moves,
+      );
+
+      this.server.to(roomSlug).emit('canvas_updated', {
+        canvas,
+      });
+    } catch {
+      // invalid session or room
+    }
+  }
+
   @SubscribeMessage('dice:roll')
   async rollDice(
     @ConnectedSocket() client: RoomSocket,

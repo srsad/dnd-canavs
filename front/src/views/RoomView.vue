@@ -204,6 +204,8 @@ async function fullSessionRefresh() {
         v-model="canvasModel"
         :participant-id="roomStore.currentParticipant?.id ?? 'unknown'"
         :can-edit="roomStore.currentParticipant?.role === 'gm' && roomStore.isRealtimeConnected"
+        :participants="roomStore.participants"
+        @commit-token-moves="roomStore.moveTokens"
       />
 
       <div class="room-sidebar">

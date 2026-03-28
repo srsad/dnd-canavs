@@ -42,6 +42,8 @@ export type Token = {
   x: number;
   y: number;
   size: number;
+  /** Участник, который может двигать фишку (мастер может двигать любую). */
+  controlledByParticipantId?: string | null;
 };
 
 export type CanvasLayer = {
