@@ -6,11 +6,12 @@ WORKDIR /app
 # Копируем файлы зависимостей
 COPY package*.json ./
 COPY prisma ./prisma/
+COPY prisma.config.ts ./
 
 # Устанавливаем все зависимости (включая dev для сборки)
 RUN npm install
 
-# Генерируем Prisma Client
+# Генерируем Prisma Client (Prisma 7: URL задаётся в prisma.config.ts)
 RUN npx prisma generate
 
 # Копируем исходный код
@@ -33,6 +34,7 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 
 # Права на файлы
 RUN chown -R nestjs:nodejs /app

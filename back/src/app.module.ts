@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaModule } from 'nestjs-prisma';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -27,8 +28,19 @@ import { RoomsGateway } from './rooms/rooms.gateway';
         },
       }),
     }),
-    PrismaModule.forRoot({
+    PrismaModule.forRootAsync({
       isGlobal: true,
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const connectionString = configService.get<string>('DATABASE_URL');
+        if (!connectionString) {
+          throw new Error('DATABASE_URL is not set');
+        }
+        const adapter = new PrismaPg({ connectionString });
+        return {
+          prismaOptions: { adapter },
+        };
+      },
     }),
   ],
   controllers: [AppController, AuthController, RoomsController],
