@@ -616,7 +616,7 @@ function toggleFog() {
 <template>
   <section class="panel board-panel">
     <div class="board-toolbar">
-      <div class="toolbar-group">
+      <div v-if="canEdit !== false" class="toolbar-group">
         <label class="field compact">
           <span>Кисть</span>
           <input v-model="brushColor" type="color" />
@@ -628,45 +628,39 @@ function toggleFog() {
       </div>
 
       <div class="toolbar-group">
-        <label class="field compact">
-          <span>Слой</span>
-          <select v-model="activeLayerId" :disabled="canEdit === false">
-            <option v-for="layer in localCanvas.layers" :key="layer.id" :value="layer.id">
-              {{ layer.visible ? '👁 ' : '⛔ ' }}{{ layer.name }}
-            </option>
-          </select>
-        </label>
-        <button class="ghost-button" type="button" :disabled="canEdit === false" @click="addLayer">
-          + слой
-        </button>
-        <button
-          v-if="activeLayer"
-          class="ghost-button"
-          type="button"
-          :disabled="canEdit === false"
-          @click="toggleLayerVisibility(activeLayer.id)"
-        >
-          {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
-        </button>
+        <template v-if="canEdit !== false">
+          <label class="field compact">
+            <span>Слой</span>
+            <select v-model="activeLayerId">
+              <option v-for="layer in localCanvas.layers" :key="layer.id" :value="layer.id">
+                {{ layer.visible ? '👁 ' : '⛔ ' }}{{ layer.name }}
+              </option>
+            </select>
+          </label>
+          <button class="ghost-button" type="button" @click="addLayer">+ слой</button>
+          <button
+            v-if="activeLayer"
+            class="ghost-button"
+            type="button"
+            @click="toggleLayerVisibility(activeLayer.id)"
+          >
+            {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
+          </button>
 
-        <div class="segmented">
-          <button
-            type="button"
-            :class="{ active: toolMode === 'draw' }"
-            :disabled="canEdit === false"
-            @click="toolMode = 'draw'"
-          >
-            Рисование
-          </button>
-          <button
-            type="button"
-            :class="{ active: toolMode === 'fog' }"
-            :disabled="canEdit === false || !localCanvas.fogEnabled"
-            @click="toolMode = 'fog'"
-          >
-            Туман (стереть)
-          </button>
-        </div>
+          <div class="segmented">
+            <button type="button" :class="{ active: toolMode === 'draw' }" @click="toolMode = 'draw'">
+              Рисование
+            </button>
+            <button
+              type="button"
+              :class="{ active: toolMode === 'fog' }"
+              :disabled="!localCanvas.fogEnabled"
+              @click="toolMode = 'fog'"
+            >
+              Туман (стереть)
+            </button>
+          </div>
+        </template>
 
         <div class="zoom-controls">
           <button class="ghost-button zoom-btn" type="button" title="Приблизить" @click="zoomIn">+</button>
@@ -674,18 +668,21 @@ function toggleFog() {
           <button class="ghost-button zoom-btn" type="button" title="Отдалить" @click="zoomOut">−</button>
           <button class="ghost-button zoom-btn" type="button" title="Сбросить вид" @click="resetView">⟲</button>
         </div>
-        <button class="ghost-button" type="button" @click="toggleGrid">
-          {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
-        </button>
-        <button class="ghost-button" type="button" :disabled="canEdit === false" @click="toggleFog">
-          {{ localCanvas.fogEnabled ? 'Выключить туман' : 'Включить туман' }}
-        </button>
-        <label v-if="localCanvas.fogEnabled" class="field compact">
-          <span>Туман</span>
-          <input v-model.number="fogBrushWidth" type="range" min="14" max="120" />
-        </label>
-        <button class="ghost-button" type="button" @click="addToken">Добавить фишку</button>
-        <button class="ghost-button" type="button" @click="clearBoard">Очистить линии</button>
+
+        <template v-if="canEdit !== false">
+          <button class="ghost-button" type="button" @click="toggleGrid">
+            {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
+          </button>
+          <button class="ghost-button" type="button" @click="toggleFog">
+            {{ localCanvas.fogEnabled ? 'Выключить туман' : 'Включить туман' }}
+          </button>
+          <label v-if="localCanvas.fogEnabled" class="field compact">
+            <span>Туман</span>
+            <input v-model.number="fogBrushWidth" type="range" min="14" max="120" />
+          </label>
+          <button class="ghost-button" type="button" @click="addToken">Добавить фишку</button>
+          <button class="ghost-button" type="button" @click="clearBoard">Очистить линии</button>
+        </template>
       </div>
     </div>
 

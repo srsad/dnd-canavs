@@ -18,26 +18,6 @@ import type {
   RoomSummaryResponse,
 } from '../types';
 
-let presenceUiListener: (() => void) | null = null;
-
-function detachPresenceUi() {
-  if (presenceUiListener) {
-    document.removeEventListener('visibilitychange', presenceUiListener);
-    presenceUiListener = null;
-  }
-}
-
-function attachPresenceUi(socketInstance: Socket) {
-  detachPresenceUi();
-  presenceUiListener = () => {
-    socketInstance.emit('presence:ui', {
-      state: document.hidden ? 'away' : 'active',
-    });
-  };
-  document.addEventListener('visibilitychange', presenceUiListener);
-  presenceUiListener();
-}
-
 export const useRoomStore = defineStore('room', () => {
   const room = ref<Room | null>(null);
   const participants = ref<Participant[]>([]);
@@ -234,12 +214,10 @@ export const useRoomStore = defineStore('room', () => {
     nextSocket.on('connect', () => {
       lostRealtime.value = false;
       error.value = null;
-      attachPresenceUi(nextSocket);
     });
 
     nextSocket.on('disconnect', () => {
       lostRealtime.value = true;
-      detachPresenceUi();
     });
 
     nextSocket.on('connect_error', () => {
@@ -250,7 +228,6 @@ export const useRoomStore = defineStore('room', () => {
 
     if (nextSocket.connected) {
       lostRealtime.value = false;
-      attachPresenceUi(nextSocket);
     }
   }
 
@@ -289,7 +266,6 @@ export const useRoomStore = defineStore('room', () => {
   }
 
   function disconnectRealtime() {
-    detachPresenceUi();
     socket.value?.disconnect();
     socket.value = null;
   }

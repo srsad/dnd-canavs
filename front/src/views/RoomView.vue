@@ -72,6 +72,8 @@ const canUseRealtime = computed(
   () => connected.value && roomStore.isRealtimeConnected,
 );
 
+const isGm = computed(() => roomStore.currentParticipant?.role === 'gm');
+
 watch(
   slug,
   async (nextSlug) => {
@@ -232,7 +234,7 @@ async function fullSessionRefresh() {
 
         <DiceLogPanel :logs="(roomStore.room?.diceLogs ?? [])" />
 
-        <section class="panel">
+        <section v-if="isGm" class="panel">
           <p class="eyebrow">Состояние</p>
           <h3>Синхронизация</h3>
           <p class="panel__copy">

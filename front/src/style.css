@@ -67,7 +67,7 @@ code {
 .page-shell.room-page {
   width: 100%;
   max-width: none;
-  padding: 8px 12px 12px;
+  padding: 6px 8px 8px;
   height: 100vh;
   box-sizing: border-box;
   overflow: hidden;
@@ -75,7 +75,7 @@ code {
 
 .room-page {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -96,8 +96,7 @@ code {
 }
 
 .two-column-grid,
-.connection-layout,
-.board-layout {
+.connection-layout {
   display: grid;
   gap: 24px;
 }
@@ -112,7 +111,9 @@ code {
 }
 
 .board-layout {
-  grid-template-columns: 1fr minmax(260px, 300px);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(200px, 240px);
   align-items: stretch;
   flex: 1;
   min-height: 0;
@@ -121,10 +122,16 @@ code {
 
 .room-sidebar {
   display: grid;
-  gap: 16px;
+  gap: 10px;
   overflow-y: auto;
   max-height: 100%;
   align-content: start;
+}
+
+.room-sidebar .panel {
+  padding: 12px 14px;
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(2, 6, 23, 0.22);
 }
 
 .room-header {
@@ -362,21 +369,22 @@ h2 {
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  min-height: 0;
 }
 
 .board-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 8px;
+  margin-bottom: 8px;
   flex-shrink: 0;
   flex-wrap: wrap;
 }
 
 .toolbar-group {
   display: flex;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
 }
@@ -385,8 +393,8 @@ h2 {
   position: relative;
   width: 100%;
   flex: 1;
-  min-height: 420px;
-  border-radius: 20px;
+  min-height: 0;
+  border-radius: 16px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.24);
   user-select: none;

@@ -45,9 +45,10 @@ function applySelected() {
         Выйти из просмотра
       </button>
       <button
+        v-if="canApply === true"
         class="primary-button"
         type="button"
-        :disabled="canApply === false || selectedIndex === null"
+        :disabled="selectedIndex === null"
         @click="applySelected"
       >
         Применить выбранный
