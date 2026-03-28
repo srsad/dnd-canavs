@@ -3,8 +3,13 @@ import { defineStore } from 'pinia';
 import type { Socket } from 'socket.io-client';
 import { apiRequest } from '../lib/api';
 import { createRoomSocket } from '../lib/socket';
+import {
+  loadRoomGuestSnapshot,
+  saveRoomGuestSnapshot,
+} from '../lib/roomGuestStorage';
 import type {
   ChatMessage,
+  CreateRoomApiResponse,
   DiceRollLog,
   JoinRoomResponse,
   Participant,
@@ -12,6 +17,26 @@ import type {
   RoomCanvas,
   RoomSummaryResponse,
 } from '../types';
+
+let presenceUiListener: (() => void) | null = null;
+
+function detachPresenceUi() {
+  if (presenceUiListener) {
+    document.removeEventListener('visibilitychange', presenceUiListener);
+    presenceUiListener = null;
+  }
+}
+
+function attachPresenceUi(socketInstance: Socket) {
+  detachPresenceUi();
+  presenceUiListener = () => {
+    socketInstance.emit('presence:ui', {
+      state: document.hidden ? 'away' : 'active',
+    });
+  };
+  document.addEventListener('visibilitychange', presenceUiListener);
+  presenceUiListener();
+}
 
 export const useRoomStore = defineStore('room', () => {
   const room = ref<Room | null>(null);
@@ -22,6 +47,7 @@ export const useRoomStore = defineStore('room', () => {
   const syncing = ref(false);
   const error = ref<string | null>(null);
   const socket = shallowRef<Socket | null>(null);
+  const lostRealtime = ref(false);
 
   async function fetchRoom(slug: string) {
     loading.value = true;
@@ -43,25 +69,41 @@ export const useRoomStore = defineStore('room', () => {
   async function createRoom(payload: {
     title: string;
     guestName?: string;
+    guestKey?: string;
     token?: string | null;
   }) {
     loading.value = true;
     error.value = null;
 
     try {
-      const response = await apiRequest<Omit<JoinRoomResponse, 'participants'>>('/rooms', {
+      const response = await apiRequest<CreateRoomApiResponse>('/rooms', {
         method: 'POST',
         token: payload.token,
         body: {
           title: payload.title,
           guestName: payload.guestName,
+          guestKey: payload.guestKey,
         },
       });
 
       room.value = response.room;
       currentParticipant.value = response.participant;
       sessionId.value = response.sessionId;
-      participants.value = [response.participant];
+      participants.value = [
+        {
+          ...response.participant,
+          presence: 'offline',
+        },
+      ];
+
+      if (response.participant.kind === 'guest' && response.guestKey) {
+        saveRoomGuestSnapshot(response.room.slug, {
+          guestKey: response.guestKey,
+          guestName: response.participant.displayName,
+          hostSecret: response.hostSecret,
+        });
+      }
+
       return response.room.slug;
     } catch (caughtError) {
       error.value = caughtError instanceof Error ? caughtError.message : 'Room creation failed.';
@@ -74,19 +116,26 @@ export const useRoomStore = defineStore('room', () => {
   async function joinRoom(payload: {
     slug: string;
     guestName?: string;
+    guestKey?: string;
+    hostSecret?: string;
     token?: string | null;
   }) {
     loading.value = true;
     error.value = null;
 
     try {
+      const isRegistered = Boolean(payload.token);
+      const snap = isRegistered ? null : loadRoomGuestSnapshot(payload.slug);
+
       const response = await apiRequest<JoinRoomResponse>(
         `/rooms/${payload.slug}/join`,
         {
           method: 'POST',
           token: payload.token,
           body: {
-            guestName: payload.guestName,
+            guestName: payload.guestName ?? snap?.guestName,
+            guestKey: isRegistered ? undefined : (payload.guestKey ?? snap?.guestKey),
+            hostSecret: isRegistered ? undefined : (payload.hostSecret ?? snap?.hostSecret),
           },
         },
       );
@@ -95,6 +144,16 @@ export const useRoomStore = defineStore('room', () => {
       currentParticipant.value = response.participant;
       sessionId.value = response.sessionId;
       participants.value = response.participants;
+
+      if (response.participant.kind === 'guest' && response.guestKey) {
+        const prev = loadRoomGuestSnapshot(payload.slug);
+        saveRoomGuestSnapshot(payload.slug, {
+          guestKey: response.guestKey,
+          guestName: response.participant.displayName,
+          hostSecret: prev?.hostSecret,
+        });
+      }
+
       return response;
     } catch (caughtError) {
       error.value = caughtError instanceof Error ? caughtError.message : 'Join failed.';
@@ -102,6 +161,20 @@ export const useRoomStore = defineStore('room', () => {
     } finally {
       loading.value = false;
     }
+  }
+
+  async function refreshRoomSession(opts: {
+    slug: string;
+    guestName?: string;
+    token?: string | null;
+  }) {
+    disconnectRealtime();
+    await joinRoom({
+      slug: opts.slug,
+      guestName: opts.guestName,
+      token: opts.token,
+    });
+    connectRealtime();
   }
 
   function connectRealtime() {
@@ -151,11 +224,27 @@ export const useRoomStore = defineStore('room', () => {
       };
     });
 
+    nextSocket.on('connect', () => {
+      lostRealtime.value = false;
+      error.value = null;
+      attachPresenceUi(nextSocket);
+    });
+
+    nextSocket.on('disconnect', () => {
+      lostRealtime.value = true;
+      detachPresenceUi();
+    });
+
     nextSocket.on('connect_error', () => {
       error.value = 'Realtime connection failed.';
     });
 
     socket.value = nextSocket;
+
+    if (nextSocket.connected) {
+      lostRealtime.value = false;
+      attachPresenceUi(nextSocket);
+    }
   }
 
   function rollDice(diceType: string, count = 1) {
@@ -175,6 +264,10 @@ export const useRoomStore = defineStore('room', () => {
       return;
     }
 
+    if (!socket.value?.connected) {
+      return;
+    }
+
     room.value = {
       ...room.value,
       canvas,
@@ -189,6 +282,7 @@ export const useRoomStore = defineStore('room', () => {
   }
 
   function disconnectRealtime() {
+    detachPresenceUi();
     socket.value?.disconnect();
     socket.value = null;
   }
@@ -200,9 +294,12 @@ export const useRoomStore = defineStore('room', () => {
     currentParticipant.value = null;
     sessionId.value = null;
     error.value = null;
+    lostRealtime.value = false;
   }
 
   const canConnect = computed(() => Boolean(room.value && sessionId.value));
+
+  const isRealtimeConnected = computed(() => Boolean(socket.value?.connected));
 
   let syncTimerId = 0;
 
@@ -214,15 +311,19 @@ export const useRoomStore = defineStore('room', () => {
     disconnectRealtime,
     error,
     fetchRoom,
+    isRealtimeConnected,
     joinRoom,
     loading,
+    lostRealtime,
     participants,
+    refreshRoomSession,
     replaceCanvas,
     reset,
     rollDice,
     sendChat,
     room,
     sessionId,
+    socket,
     syncing,
   };
 });

@@ -32,7 +32,12 @@ function roll() {
         <input v-model.number="count" type="number" min="1" max="20" class="dice-count" />
       </label>
 
-      <button class="primary-button dice-roll-btn" type="button" @click="roll">
+      <button
+        class="primary-button dice-roll-btn"
+        type="button"
+        :disabled="!roomStore.isRealtimeConnected"
+        @click="roll"
+      >
         Бросить
       </button>
     </div>

@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PrismaService } from 'nestjs-prisma';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import {
@@ -13,7 +13,9 @@ import {
   ChatMessage,
   DiceRollLog,
   RoomCanvasState,
+  ParticipantPresence,
   RoomParticipant,
+  RoomParticipantWithPresence,
   RoomRecord,
   RoomSession,
 } from './rooms.types';
@@ -22,14 +24,36 @@ import {
 export class RoomsService {
   private readonly sessions = new Map<string, RoomSession>();
 
+  private readonly sessionTtlMs =
+    (Number(process.env.SESSION_TTL_MINUTES) > 0
+      ? Number(process.env.SESSION_TTL_MINUTES)
+      : 30) *
+    60 *
+    1000;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async createRoom(input: {
     title: string;
     user?: AuthenticatedRequestUser;
     guestName?: string;
+    guestKey?: string;
   }) {
-    const creator = this.resolveParticipant(input.user, input.guestName, 'gm');
+    let hostSecretPlain: string | undefined;
+    let hostSecretHash: string | null = null;
+
+    const creator = input.user
+      ? this.resolveRegisteredParticipant(input.user, 'gm')
+      : (() => {
+          hostSecretPlain = randomBytes(32).toString('hex');
+          hostSecretHash = this.hashHostSecret(hostSecretPlain);
+          return this.resolveGuestParticipant(
+            input.guestName,
+            input.guestKey,
+            'gm',
+          );
+        })();
+
     const slug = this.createSlug();
 
     const room: RoomRecord = {
@@ -42,6 +66,7 @@ export class RoomsService {
       diceLogs: [],
       canvasHistory: [],
       chatMessages: [],
+      hostSecretHash,
     };
 
     await this.prisma.room.create({
@@ -55,6 +80,7 @@ export class RoomsService {
         diceLogs: room.diceLogs as unknown as object,
         canvasHistory: room.canvasHistory as unknown as object,
         chatMessages: room.chatMessages as unknown as object,
+        hostSecretHash,
       },
     });
 
@@ -64,6 +90,9 @@ export class RoomsService {
       room: this.serializeRoom(room),
       participant: creator,
       sessionId: session.sessionId,
+      guestKey:
+        creator.kind === 'guest' ? creator.id.replace(/^guest:/, '') : undefined,
+      hostSecret: hostSecretPlain,
     };
   }
 
@@ -80,9 +109,53 @@ export class RoomsService {
     slug: string;
     user?: AuthenticatedRequestUser;
     guestName?: string;
+    guestKey?: string;
+    hostSecret?: string;
   }) {
     const room = await this.findRoomOrThrow(input.slug);
-    const participant = this.resolveParticipant(input.user, input.guestName, 'player');
+    const secret = input.hostSecret?.trim();
+
+    if (!input.user && secret && room.hostSecretHash) {
+      if (!this.verifyHostSecret(secret, room.hostSecretHash)) {
+        throw new BadRequestException('Invalid host secret.');
+      }
+      if (room.createdBy.kind !== 'guest') {
+        throw new BadRequestException('Host secret is not valid for this room.');
+      }
+      const participant: RoomParticipant = { ...room.createdBy };
+      const session = this.createSession(input.slug, participant);
+
+      return {
+        room: this.serializeRoom(room),
+        participant,
+        sessionId: session.sessionId,
+        participants: this.listParticipants(input.slug, room.createdBy),
+        guestKey: participant.id.replace(/^guest:/, ''),
+      };
+    }
+
+    if (secret && !room.hostSecretHash) {
+      throw new BadRequestException('Invalid host secret.');
+    }
+
+    let participant: RoomParticipant;
+
+    if (input.user) {
+      const ownerUserId = `user:${input.user.id}`;
+      const isRegisteredOwner =
+        room.createdBy.kind === 'registered' &&
+        room.createdBy.id === ownerUserId;
+      participant = isRegisteredOwner
+        ? { ...room.createdBy }
+        : this.resolveRegisteredParticipant(input.user, 'player');
+    } else {
+      participant = this.resolveGuestParticipant(
+        input.guestName,
+        input.guestKey,
+        'player',
+      );
+    }
+
     const session = this.createSession(input.slug, participant);
 
     return {
@@ -90,6 +163,10 @@ export class RoomsService {
       participant,
       sessionId: session.sessionId,
       participants: this.listParticipants(input.slug, room.createdBy),
+      guestKey:
+        participant.kind === 'guest'
+          ? participant.id.replace(/^guest:/, '')
+          : undefined,
     };
   }
 
@@ -116,9 +193,16 @@ export class RoomsService {
   }
 
   async validateSession(sessionId: string, roomSlug: string) {
+    this.pruneStaleSessions();
+
     const session = this.sessions.get(sessionId);
 
     if (!session || session.roomSlug !== roomSlug) {
+      throw new NotFoundException('Session not found.');
+    }
+
+    if (!this.isSessionWithinGrace(session)) {
+      this.sessions.delete(sessionId);
       throw new NotFoundException('Session not found.');
     }
 
@@ -137,24 +221,134 @@ export class RoomsService {
     return room.canvasHistory ?? [];
   }
 
-  disconnectSession(sessionId: string) {
-    this.sessions.delete(sessionId);
+  markSocketDisconnected(sessionId: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.connected = false;
+    session.disconnectedAt = new Date().toISOString();
+    session.socketId = undefined;
   }
 
-  listParticipants(roomSlug: string, owner?: RoomParticipant): RoomParticipant[] {
-    const uniqueParticipants = new Map<string, RoomParticipant>();
-
-    if (owner) {
-      uniqueParticipants.set(owner.id, owner);
+  /**
+   * @returns previous socket id if it should be disconnected (another tab took over)
+   */
+  markSocketConnected(sessionId: string, socketId: string): string | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return undefined;
     }
+    const previous =
+      session.socketId !== undefined && session.socketId !== socketId
+        ? session.socketId
+        : undefined;
+    session.socketId = socketId;
+    session.connected = true;
+    session.disconnectedAt = undefined;
+    session.lastSeenAt = new Date().toISOString();
+    return previous;
+  }
 
-    for (const session of this.sessions.values()) {
-      if (session.roomSlug === roomSlug) {
-        uniqueParticipants.set(session.participant.id, session.participant);
+  updateSessionClientPresence(
+    sessionId: string,
+    state: 'active' | 'away',
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session || !session.connected) {
+      return;
+    }
+    session.clientUiPresence = state;
+  }
+
+  listParticipants(
+    roomSlug: string,
+    owner?: RoomParticipant,
+  ): RoomParticipantWithPresence[] {
+    this.pruneStaleSessions();
+
+    const sessionsHere = [...this.sessions.values()].filter(
+      (s) => s.roomSlug === roomSlug && this.isSessionWithinGrace(s),
+    );
+
+    const presenceRank = (p: ParticipantPresence) =>
+      p === 'online' ? 2 : p === 'away' ? 1 : 0;
+
+    const presenceByParticipantId = new Map<string, ParticipantPresence>();
+
+    for (const s of sessionsHere) {
+      const next = this.sessionToPresence(s);
+      const prev = presenceByParticipantId.get(s.participant.id);
+      if (prev === undefined || presenceRank(next) > presenceRank(prev)) {
+        presenceByParticipantId.set(s.participant.id, next);
       }
     }
 
-    return [...uniqueParticipants.values()];
+    const result: RoomParticipantWithPresence[] = [];
+    const seen = new Set<string>();
+
+    if (owner) {
+      result.push({
+        ...owner,
+        presence: presenceByParticipantId.get(owner.id) ?? 'offline',
+      });
+      seen.add(owner.id);
+    }
+
+    for (const s of sessionsHere) {
+      if (seen.has(s.participant.id)) {
+        continue;
+      }
+      seen.add(s.participant.id);
+      result.push({
+        ...s.participant,
+        presence:
+          presenceByParticipantId.get(s.participant.id) ?? 'offline',
+      });
+    }
+
+    return result;
+  }
+
+  private pruneStaleSessions() {
+    for (const [id, session] of this.sessions) {
+      if (!this.isSessionWithinGrace(session)) {
+        this.sessions.delete(id);
+      }
+    }
+  }
+
+  private isSessionWithinGrace(session: RoomSession): boolean {
+    if (session.connected) {
+      return true;
+    }
+    const ref = session.disconnectedAt ?? session.createdAt;
+    return Date.now() - new Date(ref).getTime() <= this.sessionTtlMs;
+  }
+
+  private sessionToPresence(session: RoomSession): ParticipantPresence {
+    if (!session.connected) {
+      return 'offline';
+    }
+    return session.clientUiPresence === 'away' ? 'away' : 'online';
+  }
+
+  private hashHostSecret(secret: string): string {
+    return createHash('sha256').update(secret, 'utf8').digest('hex');
+  }
+
+  private verifyHostSecret(secret: string, storedHash: string): boolean {
+    const computed = createHash('sha256').update(secret, 'utf8').digest('hex');
+    try {
+      const a = Buffer.from(computed, 'hex');
+      const b = Buffer.from(storedHash, 'hex');
+      if (a.length !== b.length) {
+        return false;
+      }
+      return timingSafeEqual(a, b);
+    } catch {
+      return false;
+    }
   }
 
   private async findRoomOrThrow(slug: string): Promise<RoomRecord> {
@@ -176,6 +370,7 @@ export class RoomsService {
       diceLogs: (dbRoom.diceLogs as unknown as DiceRollLog[]) ?? [],
       canvasHistory: (dbRoom.canvasHistory as unknown as RoomCanvasState[]) ?? [],
       chatMessages: (dbRoom.chatMessages as unknown as ChatMessage[]) ?? [],
+      hostSecretHash: dbRoom.hostSecretHash,
     };
 
     return room;
@@ -278,21 +473,24 @@ export class RoomsService {
     return 6;
   }
 
-  private resolveParticipant(
-    user: AuthenticatedRequestUser | undefined,
-    guestName: string | undefined,
+  private resolveRegisteredParticipant(
+    user: AuthenticatedRequestUser,
     role: RoomParticipant['role'],
   ): RoomParticipant {
-    if (user) {
-      return {
-        id: `user:${user.id}`,
-        displayName: user.displayName,
-        kind: 'registered',
-        role,
-        userId: user.id,
-      };
-    }
+    return {
+      id: `user:${user.id}`,
+      displayName: user.displayName,
+      kind: 'registered',
+      role,
+      userId: user.id,
+    };
+  }
 
+  private resolveGuestParticipant(
+    guestName: string | undefined,
+    guestKey: string | undefined,
+    role: RoomParticipant['role'],
+  ): RoomParticipant {
     const normalizedGuestName = guestName?.trim();
 
     if (!normalizedGuestName) {
@@ -301,12 +499,24 @@ export class RoomsService {
       );
     }
 
+    const trimmedKey = guestKey?.trim();
+    const key =
+      trimmedKey && this.isValidGuestKey(trimmedKey)
+        ? trimmedKey.toLowerCase()
+        : randomUUID();
+
     return {
-      id: `guest:${randomUUID()}`,
+      id: `guest:${key}`,
       displayName: normalizedGuestName,
       kind: 'guest',
       role,
     };
+  }
+
+  private isValidGuestKey(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    );
   }
 
   private createSession(
@@ -319,6 +529,8 @@ export class RoomsService {
       participant,
       createdAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
+      connected: false,
+      clientUiPresence: 'active',
     };
 
     this.sessions.set(session.sessionId, session);

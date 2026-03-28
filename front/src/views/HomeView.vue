@@ -11,7 +11,7 @@ const authStore = useAuthStore();
 const roomStore = useRoomStore();
 const roomLink = ref('');
 
-async function createRoom(payload: { title: string; guestName?: string }) {
+async function createRoom(payload: { title: string; guestName?: string; guestKey?: string }) {
   const slug = await roomStore.createRoom({
     ...payload,
     token: authStore.accessToken,

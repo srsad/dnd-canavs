@@ -10,12 +10,16 @@ export type AuthResponse = {
   user: User;
 };
 
+export type ParticipantPresence = 'online' | 'offline' | 'away';
+
 export type Participant = {
   id: string;
   displayName: string;
   kind: 'registered' | 'guest';
   role: 'gm' | 'player';
   userId?: string;
+  /** Omitted on `room.createdBy` until merged from presence payloads */
+  presence?: ParticipantPresence;
 };
 
 export type StrokePoint = {
@@ -97,6 +101,13 @@ export type JoinRoomResponse = {
   participant: Participant;
   participants: Participant[];
   sessionId: string;
+  /** UUID fragment for guest identity persistence */
+  guestKey?: string;
+};
+
+/** POST /rooms */
+export type CreateRoomApiResponse = Omit<JoinRoomResponse, 'participants'> & {
+  hostSecret?: string;
 };
 
 export type RoomSummaryResponse = {

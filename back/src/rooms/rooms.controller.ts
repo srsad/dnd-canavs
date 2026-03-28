@@ -19,6 +19,7 @@ export class RoomsController {
     return this.roomsService.createRoom({
       title: dto.title,
       guestName: dto.guestName,
+      guestKey: dto.guestKey,
       user,
     });
   }
@@ -42,6 +43,8 @@ export class RoomsController {
     return this.roomsService.joinRoom({
       slug,
       guestName: dto.guestName,
+      guestKey: dto.guestKey,
+      hostSecret: dto.hostSecret,
       user,
     });
   }

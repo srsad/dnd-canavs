@@ -7,9 +7,10 @@ import CanvasHistoryPanel from '../components/CanvasHistoryPanel.vue';
 import DiceLogPanel from '../components/DiceLogPanel.vue';
 import DiceRoller from '../components/DiceRoller.vue';
 import ParticipantsPanel from '../components/ParticipantsPanel.vue';
+import { loadRoomGuestSnapshot } from '../lib/roomGuestStorage';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
-import type { RoomCanvas } from '../types';
+import type { ParticipantPresence, RoomCanvas } from '../types';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -49,6 +50,28 @@ const canRenderBoard = computed(
   () => connected.value && roomStore.room && roomStore.currentParticipant,
 );
 
+const gmPresence = computed<ParticipantPresence | null>(() => {
+  const gmId = roomStore.room?.createdBy.id;
+  if (!gmId) {
+    return null;
+  }
+  const row = roomStore.participants.find((p) => p.id === gmId);
+  return row?.presence ?? 'offline';
+});
+
+const showGmOfflineNotice = computed(
+  () =>
+    Boolean(
+      gmPresence.value &&
+        gmPresence.value !== 'online' &&
+        roomStore.currentParticipant?.role !== 'gm',
+    ),
+);
+
+const canUseRealtime = computed(
+  () => connected.value && roomStore.isRealtimeConnected,
+);
+
 watch(
   slug,
   async (nextSlug) => {
@@ -62,6 +85,11 @@ watch(
     }
 
     await roomStore.fetchRoom(nextSlug);
+
+    const snap = loadRoomGuestSnapshot(nextSlug);
+    if (snap?.guestName && !isRegisteredUser.value && !guestName.value.trim()) {
+      guestName.value = snap.guestName;
+    }
 
     if (hasExistingSession) {
       roomStore.connectRealtime();
@@ -92,6 +120,18 @@ async function connectToRoom() {
 
 async function copyLink() {
   await navigator.clipboard.writeText(roomUrl.value);
+}
+
+function retryRealtime() {
+  roomStore.socket?.connect();
+}
+
+async function fullSessionRefresh() {
+  await roomStore.refreshRoomSession({
+    slug: slug.value,
+    guestName: isRegisteredUser.value ? undefined : guestName.value,
+    token: authStore.accessToken,
+  });
 }
 </script>
 
@@ -137,10 +177,31 @@ async function copyLink() {
     </section>
 
     <section v-else-if="canRenderBoard" class="board-layout">
+      <div
+        v-if="connected && roomStore.lostRealtime"
+        class="realtime-banner panel"
+        role="status"
+      >
+        <p>
+          Связь с сервером потеряна. Обычно соединение восстанавливается само; если нет — запросите
+          новую сессию.
+        </p>
+        <div class="realtime-banner__actions">
+          <button class="ghost-button" type="button" @click="retryRealtime">Переподключить</button>
+          <button class="primary-button" type="button" :disabled="roomStore.loading" @click="fullSessionRefresh">
+            Новая сессия
+          </button>
+        </div>
+      </div>
+
+      <div v-if="showGmOfflineNotice" class="gm-offline-banner panel" role="status">
+        <p>Мастер сейчас не в сети или отошёл. Холст доступен для просмотра; правки мастера появятся, когда он подключится.</p>
+      </div>
+
       <CanvasBoard
         v-model="canvasModel"
         :participant-id="roomStore.currentParticipant?.id ?? 'unknown'"
-        :can-edit="roomStore.currentParticipant?.role === 'gm'"
+        :can-edit="roomStore.currentParticipant?.role === 'gm' && roomStore.isRealtimeConnected"
       />
 
       <div class="room-sidebar">
@@ -151,7 +212,7 @@ async function copyLink() {
 
         <CanvasHistoryPanel
           :history="(roomStore.room?.canvasHistory ?? [])"
-          :can-apply="roomStore.currentParticipant?.role === 'gm' && !replayCanvas"
+          :can-apply="roomStore.currentParticipant?.role === 'gm' && !replayCanvas && roomStore.isRealtimeConnected"
           @preview="replayCanvas = $event"
           @apply="
             (canvas) => {
@@ -163,7 +224,7 @@ async function copyLink() {
 
         <ChatPanel
           :messages="(roomStore.room?.chatMessages ?? [])"
-          :can-send="connected"
+          :can-send="canUseRealtime"
           @send="roomStore.sendChat"
         />
 

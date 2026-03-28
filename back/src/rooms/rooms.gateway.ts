@@ -44,6 +44,16 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.data.sessionId = sessionId;
       client.join(roomSlug);
 
+      const previousSocketId = this.roomsService.markSocketConnected(
+        sessionId,
+        client.id,
+      );
+      if (previousSocketId) {
+        const remoteSockets = await this.server.fetchSockets();
+        const stale = remoteSockets.find((s) => s.id === previousSocketId);
+        await stale?.disconnect(true);
+      }
+
       client.emit('room_state', {
         room,
         participants: this.roomsService.listParticipants(roomSlug, room.createdBy),
@@ -65,7 +75,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    this.roomsService.disconnectSession(sessionId);
+    this.roomsService.markSocketDisconnected(sessionId);
     const roomData = await this.roomsService.getRoomBySlug(roomSlug).catch(() => undefined);
 
     this.server.to(roomSlug).emit('presence_updated', {
@@ -139,6 +149,30 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     } catch {
       // session invalid — ignore
     }
+  }
+
+  @SubscribeMessage('presence:ui')
+  async setClientPresence(
+    @ConnectedSocket() client: RoomSocket,
+    @MessageBody() body: { state?: string },
+  ) {
+    const sessionId = client.data.sessionId;
+    if (!sessionId) {
+      return;
+    }
+    const state = body.state === 'away' ? 'away' : 'active';
+    this.roomsService.updateSessionClientPresence(sessionId, state);
+    const roomSlug = client.data.roomSlug;
+    if (!roomSlug) {
+      return;
+    }
+    const roomData = await this.roomsService.getRoomBySlug(roomSlug).catch(() => undefined);
+    this.server.to(roomSlug).emit('presence_updated', {
+      participants: this.roomsService.listParticipants(
+        roomSlug,
+        roomData?.room.createdBy,
+      ),
+    });
   }
 
   @SubscribeMessage('chat:send')

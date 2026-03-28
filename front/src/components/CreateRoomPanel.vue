@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { useAuthStore } from '../stores/auth';
 
 const emit = defineEmits<{
-  create: [payload: { title: string; guestName?: string }];
+  create: [payload: { title: string; guestName?: string; guestKey?: string }];
 }>();
 
 const authStore = useAuthStore();
@@ -16,6 +16,7 @@ function submit() {
   emit('create', {
     title: title.value,
     guestName: isGuestFlow.value ? guestName.value : undefined,
+    guestKey: isGuestFlow.value ? crypto.randomUUID() : undefined,
   });
 }
 </script>

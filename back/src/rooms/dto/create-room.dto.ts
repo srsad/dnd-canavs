@@ -1,4 +1,4 @@
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
 
 export class CreateRoomDto {
   @IsString()
@@ -9,4 +9,9 @@ export class CreateRoomDto {
   @IsString()
   @MinLength(2)
   guestName?: string;
+
+  /** Stable guest identity (UUID v4); omit to let server assign */
+  @IsOptional()
+  @IsUUID('4')
+  guestKey?: string;
 }

@@ -6,6 +6,13 @@ export type RoomParticipant = {
   userId?: string;
 };
 
+/** Server-computed presence for room_state / presence_updated */
+export type ParticipantPresence = 'online' | 'offline' | 'away';
+
+export type RoomParticipantWithPresence = RoomParticipant & {
+  presence: ParticipantPresence;
+};
+
 export type CanvasStrokePoint = {
   x: number;
   y: number;
@@ -78,6 +85,8 @@ export type RoomRecord = {
   diceLogs: DiceRollLog[];
   canvasHistory: RoomCanvasState[];
   chatMessages: ChatMessage[];
+  /** Loaded from DB; never sent to clients */
+  hostSecretHash?: string | null;
 };
 
 export type RoomSession = {
@@ -86,4 +95,10 @@ export type RoomSession = {
   participant: RoomParticipant;
   createdAt: string;
   lastSeenAt: string;
+  /** WebSocket currently attached */
+  connected: boolean;
+  disconnectedAt?: string;
+  socketId?: string;
+  /** Tab visibility / idle hint from client (only while connected) */
+  clientUiPresence: 'active' | 'away';
 };
