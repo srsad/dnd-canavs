@@ -9,7 +9,8 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { RoomsService } from './rooms.service';
-import { RoomCanvasState } from './rooms.types';
+import { effectivePermissions, mergeParticipantWithAcl } from './rooms.permissions';
+import { RoomCanvasState, RoomParticipant } from './rooms.types';
 
 type RoomSocket = Socket & {
   data: {
@@ -46,7 +47,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         .getRoomBySlug(roomSlug)
         .catch(() => undefined);
       this.server.to(roomSlug).emit('presence_updated', {
-        participants: this.roomsService.listParticipants(
+        participants: await this.roomsService.listParticipants(
           roomSlug,
           roomData?.room.createdBy,
         ),
@@ -70,7 +71,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.data.sessionId = sessionId;
       client.join(roomSlug);
 
-      const previousSocketId = this.roomsService.markSocketConnected(
+      const previousSocketId = await this.roomsService.markSocketConnected(
         sessionId,
         client.id,
       );
@@ -80,13 +81,24 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         await stale?.disconnect(true);
       }
 
+      const roomPayload = {
+        ...this.roomsService.serializeRoom(room),
+        createdBy: mergeParticipantWithAcl(room.createdBy, room.participantAcl),
+      };
+
       client.emit('room_state', {
-        room,
-        participants: this.roomsService.listParticipants(roomSlug, room.createdBy),
+        room: roomPayload,
+        participants: await this.roomsService.listParticipants(
+          roomSlug,
+          room.createdBy,
+        ),
       });
 
       this.server.to(roomSlug).emit('presence_updated', {
-        participants: this.roomsService.listParticipants(roomSlug, room.createdBy),
+        participants: await this.roomsService.listParticipants(
+          roomSlug,
+          room.createdBy,
+        ),
       });
     } catch {
       client.disconnect();
@@ -101,7 +113,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    const presenceChanged = this.roomsService.markSocketDisconnected(
+    const presenceChanged = await this.roomsService.markSocketDisconnected(
       sessionId,
       client.id,
     );
@@ -112,7 +124,7 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const roomData = await this.roomsService.getRoomBySlug(roomSlug).catch(() => undefined);
 
     this.server.to(roomSlug).emit('presence_updated', {
-      participants: this.roomsService.listParticipants(
+      participants: await this.roomsService.listParticipants(
         roomSlug,
         roomData?.room.createdBy,
       ),
@@ -131,17 +143,23 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
+    let participant: RoomParticipant;
     try {
       const { session } = await this.roomsService.validateSession(sessionId, roomSlug);
 
-      if (session.participant.role !== 'gm') {
+      if (!effectivePermissions(session.participant).editCanvas) {
         return;
       }
+      participant = session.participant;
     } catch {
       return;
     }
 
-    const canvas = await this.roomsService.replaceCanvas(roomSlug, body.canvas);
+    const canvas = await this.roomsService.replaceCanvas(
+      roomSlug,
+      body.canvas,
+      participant,
+    );
 
     this.server.to(roomSlug).emit('canvas_updated', {
       canvas,
@@ -227,14 +245,14 @@ export class RoomsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
     const state = body.state === 'away' ? 'away' : 'active';
-    this.roomsService.updateSessionClientPresence(sessionId, state);
+    await this.roomsService.updateSessionClientPresence(sessionId, state);
     const roomSlug = client.data.roomSlug;
     if (!roomSlug) {
       return;
     }
     const roomData = await this.roomsService.getRoomBySlug(roomSlug).catch(() => undefined);
     this.server.to(roomSlug).emit('presence_updated', {
-      participants: this.roomsService.listParticipants(
+      participants: await this.roomsService.listParticipants(
         roomSlug,
         roomData?.room.createdBy,
       ),

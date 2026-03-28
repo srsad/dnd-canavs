@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  ForbiddenException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -7,14 +9,22 @@ import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { PrismaService } from 'nestjs-prisma';
 import { AuthenticatedRequestUser } from '../auth/auth.types';
 import {
+  effectivePermissions,
+  mergeParticipantWithAcl,
+} from './rooms.permissions';
+import type { RoomSessionStore } from './session/room-session.store';
+import { ROOM_SESSION_STORE } from './session/room-session.store';
+import {
   CanvasToken,
   CanvasStroke,
   CanvasStrokePoint,
   ChatMessage,
   DiceRollLog,
   RoomCanvasState,
+  ParticipantAcl,
   ParticipantPresence,
   RoomParticipant,
+  RoomParticipantPermissions,
   RoomParticipantWithPresence,
   RoomRecord,
   RoomSession,
@@ -22,8 +32,6 @@ import {
 
 @Injectable()
 export class RoomsService {
-  private readonly sessions = new Map<string, RoomSession>();
-
   /** Sockets to disconnect after HTTP replaced their session (evict). */
   private readonly staleSocketsToKick: Array<{
     socketId: string;
@@ -37,7 +45,10 @@ export class RoomsService {
     60 *
     1000;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(ROOM_SESSION_STORE) private readonly sessionStore: RoomSessionStore,
+  ) {}
 
   async createRoom(input: {
     title: string;
@@ -73,6 +84,7 @@ export class RoomsService {
       canvasHistory: [],
       chatMessages: [],
       hostSecretHash,
+      participantAcl: {},
     };
 
     await this.prisma.room.create({
@@ -87,19 +99,27 @@ export class RoomsService {
         canvasHistory: room.canvasHistory as unknown as object,
         chatMessages: room.chatMessages as unknown as object,
         hostSecretHash,
+        participantAcl: {},
       },
     });
 
-    const session = this.createSession(slug, creator);
-    this.evictOtherSessionsForRoomParticipant(
+    const session = await this.createSession(slug, creator);
+    await this.evictOtherSessionsForRoomParticipant(
       slug,
       creator.id,
       session.sessionId,
     );
 
+    await this.appendAudit(room.id, creator.id, 'room_created', {
+      title: room.title,
+    });
+
     return {
-      room: this.serializeRoom(room),
-      participant: creator,
+      room: {
+        ...this.serializeRoom(room),
+        createdBy: mergeParticipantWithAcl(creator, room.participantAcl),
+      },
+      participant: mergeParticipantWithAcl(creator, room.participantAcl),
       sessionId: session.sessionId,
       guestKey:
         creator.kind === 'guest' ? creator.id.replace(/^guest:/, '') : undefined,
@@ -111,8 +131,11 @@ export class RoomsService {
     const room = await this.findRoomOrThrow(slug);
 
     return {
-      room: this.serializeRoom(room),
-      participants: this.listParticipants(slug, room.createdBy),
+      room: {
+        ...this.serializeRoom(room),
+        createdBy: mergeParticipantWithAcl(room.createdBy, room.participantAcl),
+      },
+      participants: await this.listParticipants(slug, room.createdBy),
     };
   }
 
@@ -134,18 +157,26 @@ export class RoomsService {
         throw new BadRequestException('Host secret is not valid for this room.');
       }
       const participant: RoomParticipant = { ...room.createdBy };
-      const session = this.createSession(input.slug, participant);
-      this.evictOtherSessionsForRoomParticipant(
+      const session = await this.createSession(input.slug, participant);
+      await this.evictOtherSessionsForRoomParticipant(
         input.slug,
         participant.id,
         session.sessionId,
       );
 
+      await this.appendAudit(room.id, participant.id, 'participant_join', {
+        displayName: participant.displayName,
+        role: participant.role,
+      });
+
       return {
-        room: this.serializeRoom(room),
-        participant,
+        room: {
+          ...this.serializeRoom(room),
+          createdBy: mergeParticipantWithAcl(room.createdBy, room.participantAcl),
+        },
+        participant: mergeParticipantWithAcl(participant, room.participantAcl),
         sessionId: session.sessionId,
-        participants: this.listParticipants(input.slug, room.createdBy),
+        participants: await this.listParticipants(input.slug, room.createdBy),
         guestKey: participant.id.replace(/^guest:/, ''),
       };
     }
@@ -172,21 +203,29 @@ export class RoomsService {
       );
     }
 
-    const session = this.createSession(input.slug, participant);
+    const session = await this.createSession(input.slug, participant);
 
     if (participant.id === room.createdBy.id) {
-      this.evictOtherSessionsForRoomParticipant(
+      await this.evictOtherSessionsForRoomParticipant(
         input.slug,
         participant.id,
         session.sessionId,
       );
     }
 
+    await this.appendAudit(room.id, participant.id, 'participant_join', {
+      displayName: participant.displayName,
+      role: participant.role,
+    });
+
     return {
-      room: this.serializeRoom(room),
-      participant,
+      room: {
+        ...this.serializeRoom(room),
+        createdBy: mergeParticipantWithAcl(room.createdBy, room.participantAcl),
+      },
+      participant: mergeParticipantWithAcl(participant, room.participantAcl),
       sessionId: session.sessionId,
-      participants: this.listParticipants(input.slug, room.createdBy),
+      participants: await this.listParticipants(input.slug, room.createdBy),
       guestKey:
         participant.kind === 'guest'
           ? participant.id.replace(/^guest:/, '')
@@ -197,6 +236,7 @@ export class RoomsService {
   async replaceCanvas(
     slug: string,
     canvas: RoomCanvasState,
+    actor?: RoomParticipant | null,
   ): Promise<RoomCanvasState> {
     const room = await this.findRoomOrThrow(slug);
 
@@ -211,6 +251,11 @@ export class RoomsService {
         canvas: normalized as unknown as object,
         canvasHistory: limitedHistory as unknown as object,
       },
+    });
+
+    await this.appendAudit(room.id, actor?.id ?? null, 'canvas_replace', {
+      tokenCount: normalized.tokens.length,
+      layerCount: normalized.layers.length,
     });
 
     return normalized;
@@ -232,7 +277,8 @@ export class RoomsService {
 
     const room = await this.findRoomOrThrow(slug);
     const canvas = this.normalizeCanvas(room.canvas as unknown as RoomCanvasState);
-    const isGm = participant.role === 'gm';
+    const perms = effectivePermissions(participant);
+    const canMoveAny = perms.moveAnyToken;
 
     const allowed = new Map<string, { x: number; y: number }>();
     for (const raw of moves) {
@@ -240,7 +286,7 @@ export class RoomsService {
       if (!id) continue;
       const token = canvas.tokens.find((t) => t.id === id);
       if (!token) continue;
-      if (isGm) {
+      if (canMoveAny) {
         allowed.set(id, {
           x: Number(raw.x) || 0,
           y: Number(raw.y) || 0,
@@ -274,29 +320,38 @@ export class RoomsService {
       },
     });
 
+    await this.appendAudit(room.id, participant.id, 'token_move', {
+      count: allowed.size,
+      ids: [...allowed.keys()],
+    });
+
     return nextCanvas;
   }
 
   async validateSession(sessionId: string, roomSlug: string) {
-    this.pruneStaleSessions();
+    await this.pruneStaleSessions();
 
-    const session = this.sessions.get(sessionId);
+    const raw = await this.sessionStore.get(sessionId);
 
-    if (!session || session.roomSlug !== roomSlug) {
+    if (!raw || raw.roomSlug !== roomSlug) {
       throw new NotFoundException('Session not found.');
     }
 
-    if (!this.isSessionWithinGrace(session)) {
-      this.sessions.delete(sessionId);
+    if (!this.isSessionWithinGrace(raw)) {
+      await this.sessionStore.delete(sessionId);
       throw new NotFoundException('Session not found.');
     }
-
-    session.lastSeenAt = new Date().toISOString();
 
     const room = await this.findRoomOrThrow(roomSlug);
+    const identity = this.stripPermissions(raw.participant);
+    const mergedParticipant = mergeParticipantWithAcl(identity, room.participantAcl);
+
+    raw.lastSeenAt = new Date().toISOString();
+    raw.participant = identity;
+    await this.sessionStore.set(sessionId, raw);
 
     return {
-      session,
+      session: { ...raw, participant: mergedParticipant },
       room,
     };
   }
@@ -313,13 +368,14 @@ export class RoomsService {
   }
 
   /** One GM session per room: remove older sessions (and queue their sockets for kick). */
-  private evictOtherSessionsForRoomParticipant(
+  private async evictOtherSessionsForRoomParticipant(
     roomSlug: string,
     participantId: string,
     keepSessionId: string,
   ) {
-    for (const [id, sess] of this.sessions) {
-      if (id === keepSessionId) {
+    const all = await this.sessionStore.findAll();
+    for (const sess of all) {
+      if (sess.sessionId === keepSessionId) {
         continue;
       }
       if (sess.roomSlug === roomSlug && sess.participant.id === participantId) {
@@ -329,7 +385,7 @@ export class RoomsService {
             roomSlug: sess.roomSlug,
           });
         }
-        this.sessions.delete(id);
+        await this.sessionStore.delete(sess.sessionId);
       }
     }
   }
@@ -341,8 +397,11 @@ export class RoomsService {
    *
    * @returns whether presence actually changed
    */
-  markSocketDisconnected(sessionId: string, disconnectingSocketId: string): boolean {
-    const session = this.sessions.get(sessionId);
+  async markSocketDisconnected(
+    sessionId: string,
+    disconnectingSocketId: string,
+  ): Promise<boolean> {
+    const session = await this.sessionStore.get(sessionId);
     if (!session) {
       return false;
     }
@@ -355,14 +414,18 @@ export class RoomsService {
     session.connected = false;
     session.disconnectedAt = new Date().toISOString();
     session.socketId = undefined;
+    await this.sessionStore.set(sessionId, session);
     return true;
   }
 
   /**
    * @returns previous socket id if it should be disconnected (another tab took over)
    */
-  markSocketConnected(sessionId: string, socketId: string): string | undefined {
-    const session = this.sessions.get(sessionId);
+  async markSocketConnected(
+    sessionId: string,
+    socketId: string,
+  ): Promise<string | undefined> {
+    const session = await this.sessionStore.get(sessionId);
     if (!session) {
       return undefined;
     }
@@ -374,27 +437,37 @@ export class RoomsService {
     session.connected = true;
     session.disconnectedAt = undefined;
     session.lastSeenAt = new Date().toISOString();
+    await this.sessionStore.set(sessionId, session);
     return previous;
   }
 
-  updateSessionClientPresence(
+  async updateSessionClientPresence(
     sessionId: string,
     state: 'active' | 'away',
-  ): void {
-    const session = this.sessions.get(sessionId);
+  ): Promise<void> {
+    const session = await this.sessionStore.get(sessionId);
     if (!session || !session.connected) {
       return;
     }
     session.clientUiPresence = state;
+    await this.sessionStore.set(sessionId, session);
   }
 
-  listParticipants(
+  async listParticipants(
     roomSlug: string,
     owner?: RoomParticipant,
-  ): RoomParticipantWithPresence[] {
-    this.pruneStaleSessions();
+  ): Promise<RoomParticipantWithPresence[]> {
+    await this.pruneStaleSessions();
 
-    const sessionsHere = [...this.sessions.values()].filter(
+    let acl: ParticipantAcl = {};
+    try {
+      const roomRow = await this.findRoomOrThrow(roomSlug);
+      acl = roomRow.participantAcl;
+    } catch {
+      acl = {};
+    }
+
+    const sessionsHere = (await this.sessionStore.findAll()).filter(
       (s) => s.roomSlug === roomSlug && this.isSessionWithinGrace(s),
     );
 
@@ -416,7 +489,7 @@ export class RoomsService {
 
     if (owner) {
       result.push({
-        ...owner,
+        ...mergeParticipantWithAcl(owner, acl),
         presence: presenceByParticipantId.get(owner.id) ?? 'offline',
       });
       seen.add(owner.id);
@@ -427,8 +500,9 @@ export class RoomsService {
         continue;
       }
       seen.add(s.participant.id);
+      const merged = mergeParticipantWithAcl(s.participant, acl);
       result.push({
-        ...s.participant,
+        ...merged,
         presence:
           presenceByParticipantId.get(s.participant.id) ?? 'offline',
       });
@@ -437,10 +511,11 @@ export class RoomsService {
     return result;
   }
 
-  private pruneStaleSessions() {
-    for (const [id, session] of this.sessions) {
+  private async pruneStaleSessions() {
+    const all = await this.sessionStore.findAll();
+    for (const session of all) {
       if (!this.isSessionWithinGrace(session)) {
-        this.sessions.delete(id);
+        await this.sessionStore.delete(session.sessionId);
       }
     }
   }
@@ -478,7 +553,7 @@ export class RoomsService {
     }
   }
 
-  private async findRoomOrThrow(slug: string): Promise<RoomRecord> {
+  async findRoomOrThrow(slug: string): Promise<RoomRecord> {
     const dbRoom = await this.prisma.room.findUnique({
       where: { slug },
     });
@@ -498,12 +573,14 @@ export class RoomsService {
       canvasHistory: (dbRoom.canvasHistory as unknown as RoomCanvasState[]) ?? [],
       chatMessages: (dbRoom.chatMessages as unknown as ChatMessage[]) ?? [],
       hostSecretHash: dbRoom.hostSecretHash,
+      participantAcl:
+        (dbRoom.participantAcl as unknown as ParticipantAcl) ?? {},
     };
 
     return room;
   }
 
-  private serializeRoom(room: RoomRecord) {
+  serializeRoom(room: RoomRecord) {
     return {
       id: room.id,
       slug: room.slug,
@@ -554,6 +631,12 @@ export class RoomsService {
       },
     });
 
+    await this.appendAudit(room.id, participant.id, 'dice_roll', {
+      diceType,
+      count,
+      total: log.total,
+    });
+
     return log;
   }
 
@@ -586,7 +669,187 @@ export class RoomsService {
       },
     });
 
+    await this.appendAudit(room.id, participant.id, 'chat_message', {
+      length: message.text.length,
+    });
+
     return message;
+  }
+
+  assertCanManageRoom(
+    room: RoomRecord,
+    user: AuthenticatedRequestUser | undefined,
+    hostSecret?: string,
+  ) {
+    if (room.createdBy.kind === 'registered') {
+      if (!user || room.createdBy.userId !== user.id) {
+        throw new ForbiddenException('Only the room owner can do this.');
+      }
+      return;
+    }
+    if (
+      !room.hostSecretHash ||
+      !hostSecret ||
+      !this.verifyHostSecret(hostSecret, room.hostSecretHash)
+    ) {
+      throw new ForbiddenException('Host secret required.');
+    }
+  }
+
+  async exportRoomSnapshot(slug: string) {
+    const room = await this.findRoomOrThrow(slug);
+    return {
+      version: 1 as const,
+      exportedAt: new Date().toISOString(),
+      title: room.title,
+      canvas: room.canvas,
+      diceLogs: room.diceLogs ?? [],
+      canvasHistory: room.canvasHistory ?? [],
+      chatMessages: room.chatMessages ?? [],
+      participantAcl: room.participantAcl ?? {},
+    };
+  }
+
+  async importRoomSnapshot(
+    payload: {
+      version: number;
+      title: string;
+      canvas: RoomCanvasState;
+      diceLogs?: DiceRollLog[];
+      canvasHistory?: RoomCanvasState[];
+      chatMessages?: ChatMessage[];
+      participantAcl?: ParticipantAcl;
+    },
+    user: AuthenticatedRequestUser,
+  ) {
+    if (payload.version !== 1) {
+      throw new BadRequestException('Unsupported export version.');
+    }
+    const title = payload.title?.trim();
+    if (!title || title.length < 3) {
+      throw new BadRequestException('Invalid room title in import.');
+    }
+
+    const creator = this.resolveRegisteredParticipant(user, 'gm');
+    const slug = this.createSlug();
+    const room: RoomRecord = {
+      id: randomUUID(),
+      slug,
+      title,
+      createdAt: new Date().toISOString(),
+      createdBy: creator,
+      canvas: this.normalizeCanvas(payload.canvas),
+      diceLogs: Array.isArray(payload.diceLogs) ? payload.diceLogs : [],
+      canvasHistory: Array.isArray(payload.canvasHistory)
+        ? payload.canvasHistory.map((c) => this.normalizeCanvas(c))
+        : [],
+      chatMessages: Array.isArray(payload.chatMessages) ? payload.chatMessages : [],
+      hostSecretHash: null,
+      participantAcl: payload.participantAcl ?? {},
+    };
+
+    await this.prisma.room.create({
+      data: {
+        id: room.id,
+        slug: room.slug,
+        title: room.title,
+        createdAt: new Date(room.createdAt),
+        createdBy: room.createdBy as unknown as object,
+        canvas: room.canvas as unknown as object,
+        diceLogs: room.diceLogs as unknown as object,
+        canvasHistory: room.canvasHistory as unknown as object,
+        chatMessages: room.chatMessages as unknown as object,
+        hostSecretHash: null,
+        participantAcl: room.participantAcl as unknown as object,
+      },
+    });
+
+    await this.appendAudit(room.id, creator.id, 'room_imported', {
+      title: room.title,
+    });
+
+    return {
+      room: this.serializeRoom(room),
+      slug: room.slug,
+    };
+  }
+
+  async updateParticipantAcl(
+    slug: string,
+    targetParticipantId: string,
+    patch: {
+      permissions?: Partial<RoomParticipantPermissions>;
+      clear?: boolean;
+    },
+  ) {
+    const room = await this.findRoomOrThrow(slug);
+    const acl: ParticipantAcl = { ...(room.participantAcl ?? {}) };
+
+    if (patch.clear) {
+      delete acl[targetParticipantId];
+    } else if (patch.permissions && Object.keys(patch.permissions).length > 0) {
+      const prev = acl[targetParticipantId] ?? {};
+      acl[targetParticipantId] = {
+        permissions: {
+          ...prev.permissions,
+          ...patch.permissions,
+        },
+      };
+    }
+
+    await this.prisma.room.update({
+      where: { slug },
+      data: { participantAcl: acl as unknown as object },
+    });
+
+    return { participantAcl: acl };
+  }
+
+  async listAuditEvents(slug: string, skip = 0, take = 50) {
+    const room = await this.findRoomOrThrow(slug);
+    const limit = Math.min(Math.max(take, 1), 100);
+    const sk = Math.max(skip, 0);
+    const events = await this.prisma.roomAuditEvent.findMany({
+      where: { roomId: room.id },
+      orderBy: { createdAt: 'desc' },
+      skip: sk,
+      take: limit + 1,
+    });
+    const hasMore = events.length > limit;
+    const slice = hasMore ? events.slice(0, limit) : events;
+    return {
+      events: slice.map((e) => ({
+        id: e.id,
+        createdAt: e.createdAt.toISOString(),
+        actorId: e.actorId,
+        type: e.type,
+        payload: e.payload,
+      })),
+      hasMore,
+      nextSkip: hasMore ? sk + limit : sk,
+    };
+  }
+
+  private async appendAudit(
+    roomId: string,
+    actorId: string | null,
+    type: string,
+    payload: unknown,
+  ) {
+    await this.prisma.roomAuditEvent.create({
+      data: {
+        id: randomUUID(),
+        roomId,
+        actorId,
+        type,
+        payload: payload as object,
+      },
+    });
+  }
+
+  private stripPermissions(participant: RoomParticipant): RoomParticipant {
+    const { permissions: _omit, ...rest } = participant;
+    return rest;
   }
 
   private parseDiceSides(diceType: string): number {
@@ -646,21 +909,21 @@ export class RoomsService {
     );
   }
 
-  private createSession(
+  private async createSession(
     roomSlug: string,
     participant: RoomParticipant,
-  ): RoomSession {
+  ): Promise<RoomSession> {
     const session: RoomSession = {
       sessionId: randomUUID(),
       roomSlug,
-      participant,
+      participant: this.stripPermissions(participant),
       createdAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
       connected: false,
       clientUiPresence: 'active',
     };
 
-    this.sessions.set(session.sessionId, session);
+    await this.sessionStore.set(session.sessionId, session);
     return session;
   }
 

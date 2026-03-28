@@ -1,9 +1,25 @@
+/** Effective flags after merging role defaults + optional overrides (ACL). */
+export type RoomParticipantPermissions = {
+  editCanvas: boolean;
+  moveAnyToken: boolean;
+  manageParticipants: boolean;
+};
+
+export type ParticipantAclEntry = {
+  permissions?: Partial<RoomParticipantPermissions>;
+};
+
+/** Persisted overrides per participant id (see `Room.participantAcl`). */
+export type ParticipantAcl = Record<string, ParticipantAclEntry>;
+
 export type RoomParticipant = {
   id: string;
   displayName: string;
   kind: 'registered' | 'guest';
   role: 'gm' | 'player';
   userId?: string;
+  /** Partial overrides; merged with role defaults via `effectivePermissions`. */
+  permissions?: Partial<RoomParticipantPermissions>;
 };
 
 /** Server-computed presence for room_state / presence_updated */
@@ -89,6 +105,7 @@ export type RoomRecord = {
   chatMessages: ChatMessage[];
   /** Loaded from DB; never sent to clients */
   hostSecretHash?: string | null;
+  participantAcl: ParticipantAcl;
 };
 
 export type RoomSession = {

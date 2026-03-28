@@ -8,7 +8,7 @@ function resolveApiBase(): string {
 const API_URL = resolveApiBase();
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH';
   body?: unknown;
   token?: string | null;
 };

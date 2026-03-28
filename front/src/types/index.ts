@@ -12,12 +12,20 @@ export type AuthResponse = {
 
 export type ParticipantPresence = 'online' | 'offline' | 'away';
 
+export type ParticipantPermissions = {
+  editCanvas: boolean;
+  moveAnyToken: boolean;
+  manageParticipants: boolean;
+};
+
 export type Participant = {
   id: string;
   displayName: string;
   kind: 'registered' | 'guest';
   role: 'gm' | 'player';
   userId?: string;
+  /** Partial overrides merged with role defaults on the server */
+  permissions?: Partial<ParticipantPermissions>;
   /** Omitted on `room.createdBy` until merged from presence payloads */
   presence?: ParticipantPresence;
 };
@@ -115,4 +123,27 @@ export type CreateRoomApiResponse = Omit<JoinRoomResponse, 'participants'> & {
 export type RoomSummaryResponse = {
   room: Room;
   participants: Participant[];
+};
+
+/** POST /rooms/:slug/export */
+export type RoomExportSnapshot = {
+  version: 1;
+  exportedAt: string;
+  title: string;
+  canvas: RoomCanvas;
+  diceLogs: DiceRollLog[];
+  canvasHistory: RoomCanvas[];
+  chatMessages: ChatMessage[];
+  participantAcl: Record<
+    string,
+    { permissions?: Partial<ParticipantPermissions> }
+  >;
+};
+
+export type AuditEventRow = {
+  id: string;
+  createdAt: string;
+  actorId: string | null;
+  type: string;
+  payload: unknown;
 };

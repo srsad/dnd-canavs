@@ -7,10 +7,11 @@ import CanvasHistoryPanel from '../components/CanvasHistoryPanel.vue';
 import DiceLogPanel from '../components/DiceLogPanel.vue';
 import DiceRoller from '../components/DiceRoller.vue';
 import ParticipantsPanel from '../components/ParticipantsPanel.vue';
+import { effectivePermissions } from '../lib/participantPermissions';
 import { loadRoomGuestSnapshot } from '../lib/roomGuestStorage';
 import { useAuthStore } from '../stores/auth';
 import { useRoomStore } from '../stores/room';
-import type { ParticipantPresence, RoomCanvas } from '../types';
+import type { AuditEventRow, ParticipantPresence, RoomCanvas } from '../types';
 
 const route = useRoute();
 const authStore = useAuthStore();
@@ -72,7 +73,62 @@ const canUseRealtime = computed(
   () => connected.value && roomStore.isRealtimeConnected,
 );
 
-const isGm = computed(() => roomStore.currentParticipant?.role === 'gm');
+const perms = computed(() =>
+  roomStore.currentParticipant
+    ? effectivePermissions(roomStore.currentParticipant)
+    : null,
+);
+
+const isRoomOwner = computed(() => {
+  const p = roomStore.currentParticipant;
+  const r = roomStore.room;
+  if (!p || !r) {
+    return false;
+  }
+  return p.id === r.createdBy.id;
+});
+
+const guestHostSecret = computed(() => loadRoomGuestSnapshot(slug.value)?.hostSecret);
+
+const auditEvents = ref<AuditEventRow[]>([]);
+const auditLoading = ref(false);
+const auditSkip = ref(0);
+const auditHasMore = ref(false);
+
+async function loadAudit(reset: boolean) {
+  if (!isRoomOwner.value) {
+    return;
+  }
+  auditLoading.value = true;
+  try {
+    const skip = reset ? 0 : auditSkip.value;
+    const page = await roomStore.fetchAuditPage({
+      token: authStore.accessToken,
+      hostSecret: guestHostSecret.value,
+      skip,
+      take: 30,
+    });
+    auditEvents.value = reset ? page.events : [...auditEvents.value, ...page.events];
+    auditHasMore.value = page.hasMore;
+    auditSkip.value = page.nextSkip;
+  } finally {
+    auditLoading.value = false;
+  }
+}
+
+async function exportRoomFile() {
+  const data = await roomStore.exportRoomSnapshot({
+    token: authStore.accessToken,
+    hostSecret: guestHostSecret.value,
+  });
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `room-${slug.value}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 watch(
   slug,
@@ -175,6 +231,7 @@ async function fullSessionRefresh() {
       <ParticipantsPanel
         :participants="roomStore.participants"
         :current-participant-id="roomStore.currentParticipant?.id"
+        :is-room-owner="false"
       />
     </section>
 
@@ -203,7 +260,8 @@ async function fullSessionRefresh() {
       <CanvasBoard
         v-model="canvasModel"
         :participant-id="roomStore.currentParticipant?.id ?? 'unknown'"
-        :can-edit="roomStore.currentParticipant?.role === 'gm' && roomStore.isRealtimeConnected"
+        :can-edit="Boolean(perms?.editCanvas && canUseRealtime)"
+        :can-move-any-token="Boolean(perms?.moveAnyToken && canUseRealtime)"
         :participants="roomStore.participants"
         @commit-token-moves="roomStore.moveTokens"
       />
@@ -212,11 +270,16 @@ async function fullSessionRefresh() {
         <ParticipantsPanel
           :participants="roomStore.participants"
           :current-participant-id="roomStore.currentParticipant?.id"
+          :is-room-owner="isRoomOwner"
+          :room-owner-id="roomStore.room?.createdBy.id"
+          :room-slug="slug"
+          :auth-token="authStore.accessToken"
+          :host-secret="guestHostSecret"
         />
 
         <CanvasHistoryPanel
           :history="(roomStore.room?.canvasHistory ?? [])"
-          :can-apply="roomStore.currentParticipant?.role === 'gm' && !replayCanvas && roomStore.isRealtimeConnected"
+          :can-apply="Boolean(perms?.editCanvas && !replayCanvas && roomStore.isRealtimeConnected)"
           @preview="replayCanvas = $event"
           @apply="
             (canvas) => {
@@ -236,12 +299,44 @@ async function fullSessionRefresh() {
 
         <DiceLogPanel :logs="(roomStore.room?.diceLogs ?? [])" />
 
-        <section v-if="isGm" class="panel">
+        <section v-if="perms?.editCanvas" class="panel">
           <p class="eyebrow">Состояние</p>
           <h3>Синхронизация</h3>
           <p class="panel__copy">
             {{ roomStore.syncing ? 'Изменения отправляются...' : 'Холст синхронизирован.' }}
           </p>
+        </section>
+
+        <section v-if="isRoomOwner" class="panel room-owner-tools">
+          <p class="eyebrow">Владелец</p>
+          <h3>Экспорт и аудит</h3>
+          <div class="owner-tools__actions">
+            <button class="ghost-button" type="button" @click="exportRoomFile">Скачать JSON</button>
+            <button
+              class="ghost-button"
+              type="button"
+              :disabled="auditLoading"
+              @click="loadAudit(true)"
+            >
+              Загрузить журнал
+            </button>
+          </div>
+          <ul v-if="auditEvents.length" class="audit-list">
+            <li v-for="ev in auditEvents" :key="ev.id" class="audit-item">
+              <time :datetime="ev.createdAt">{{ ev.createdAt }}</time>
+              <span class="audit-type">{{ ev.type }}</span>
+              <span class="audit-actor">{{ ev.actorId ?? '—' }}</span>
+            </li>
+          </ul>
+          <button
+            v-if="auditHasMore"
+            class="ghost-button"
+            type="button"
+            :disabled="auditLoading"
+            @click="loadAudit(false)"
+          >
+            Ещё
+          </button>
         </section>
       </div>
     </section>

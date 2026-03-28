@@ -14,9 +14,11 @@ const props = withDefaults(
     modelValue: RoomCanvas;
     participantId: string;
     canEdit?: boolean;
+    /** Move any token without full canvas edit (ACL). */
+    canMoveAnyToken?: boolean;
     participants?: Participant[];
   }>(),
-  { participants: () => [] },
+  { participants: () => [], canMoveAnyToken: false },
 );
 
 const emit = defineEmits<{
@@ -54,7 +56,7 @@ const assignTokenId = ref('');
 const assignParticipantValue = ref('');
 
 function canDragToken(token: Token): boolean {
-  if (props.canEdit !== false) {
+  if (props.canEdit || props.canMoveAnyToken) {
     return true;
   }
   return token.controlledByParticipantId === props.participantId;

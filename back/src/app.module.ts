@@ -14,7 +14,11 @@ import { OptionalAuthGuard } from './auth/optional-auth.guard';
 import { RoomsController } from './rooms/rooms.controller';
 import { RoomsService } from './rooms/rooms.service';
 import { RoomsGateway } from './rooms/rooms.gateway';
+import { MemoryRoomSessionStore } from './rooms/session/memory-room-session.store';
+import { RedisRoomSessionStore } from './rooms/session/redis-room-session.store';
+import { ROOM_SESSION_STORE } from './rooms/session/room-session.store';
 import { AppExceptionFilter } from './prisma/prisma-exception.filter';
+import Redis from 'ioredis';
 
 @Module({
   imports: [
@@ -62,6 +66,22 @@ import { AppExceptionFilter } from './prisma/prisma-exception.filter';
     AuthService,
     JwtAuthGuard,
     OptionalAuthGuard,
+    MemoryRoomSessionStore,
+    {
+      provide: ROOM_SESSION_STORE,
+      useFactory: (
+        configService: ConfigService,
+        memory: MemoryRoomSessionStore,
+      ) => {
+        const url = configService.get<string>('REDIS_URL')?.trim();
+        if (!url) {
+          return memory;
+        }
+        const redis = new Redis(url, { maxRetriesPerRequest: 2 });
+        return new RedisRoomSessionStore(redis, 7 * 24 * 3600);
+      },
+      inject: [ConfigService, MemoryRoomSessionStore],
+    },
     RoomsService,
     RoomsGateway,
   ],

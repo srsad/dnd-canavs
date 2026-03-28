@@ -25,4 +25,19 @@ model Room {
   canvasHistory  Json     @default("[]") // RoomCanvasState[]
   chatMessages   Json     @default("[]") // ChatMessage[]
   hostSecretHash String? // sha256 hex; guest GM reconnect only, never exposed in API payloads
+  participantAcl Json     @default("{}") // Record<participantId, { permissions?: Partial<...> }>
+
+  auditEvents RoomAuditEvent[]
+}
+
+model RoomAuditEvent {
+  id        String   @id @default(uuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  actorId   String?
+  type      String
+  payload   Json
+
+  @@index([roomId, createdAt])
 }

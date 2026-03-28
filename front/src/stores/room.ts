@@ -7,14 +7,18 @@ import {
   loadRoomGuestSnapshot,
   saveRoomGuestSnapshot,
 } from '../lib/roomGuestStorage';
+import { effectivePermissions } from '../lib/participantPermissions';
 import type {
+  AuditEventRow,
   ChatMessage,
   CreateRoomApiResponse,
   DiceRollLog,
   JoinRoomResponse,
   Participant,
+  ParticipantPermissions,
   Room,
   RoomCanvas,
+  RoomExportSnapshot,
   RoomSummaryResponse,
 } from '../types';
 
@@ -251,7 +255,10 @@ export const useRoomStore = defineStore('room', () => {
       return;
     }
 
-    if (currentParticipant.value?.role !== 'gm') {
+    if (
+      !currentParticipant.value ||
+      !effectivePermissions(currentParticipant.value).editCanvas
+    ) {
       return;
     }
 
@@ -293,6 +300,64 @@ export const useRoomStore = defineStore('room', () => {
 
   let syncTimerId = 0;
 
+  async function exportRoomSnapshot(opts: {
+    token?: string | null;
+    hostSecret?: string;
+  }): Promise<RoomExportSnapshot> {
+    if (!room.value?.slug) {
+      throw new Error('No room loaded.');
+    }
+    return apiRequest<RoomExportSnapshot>(`/rooms/${room.value.slug}/export`, {
+      method: 'POST',
+      token: opts.token,
+      body: { hostSecret: opts.hostSecret },
+    });
+  }
+
+  async function fetchAuditPage(opts: {
+    token?: string | null;
+    hostSecret?: string;
+    skip?: number;
+    take?: number;
+  }): Promise<{ events: AuditEventRow[]; hasMore: boolean; nextSkip: number }> {
+    if (!room.value?.slug) {
+      throw new Error('No room loaded.');
+    }
+    return apiRequest(`/rooms/${room.value.slug}/audit/query`, {
+      method: 'POST',
+      token: opts.token,
+      body: {
+        hostSecret: opts.hostSecret,
+        skip: opts.skip ?? 0,
+        take: opts.take ?? 50,
+      },
+    });
+  }
+
+  async function patchParticipantPermissions(opts: {
+    participantId: string;
+    token?: string | null;
+    hostSecret?: string;
+    permissions?: Partial<ParticipantPermissions>;
+    clear?: boolean;
+  }) {
+    if (!room.value?.slug) {
+      throw new Error('No room loaded.');
+    }
+    const path = `/rooms/${room.value.slug}/participants/${encodeURIComponent(opts.participantId)}/permissions`;
+    return apiRequest<{ participantAcl: Record<string, unknown> }>(path, {
+      method: 'PATCH',
+      token: opts.token,
+      body: {
+        hostSecret: opts.hostSecret,
+        clear: opts.clear,
+        editCanvas: opts.permissions?.editCanvas,
+        moveAnyToken: opts.permissions?.moveAnyToken,
+        manageParticipants: opts.permissions?.manageParticipants,
+      },
+    });
+  }
+
   return {
     canConnect,
     connectRealtime,
@@ -300,10 +365,13 @@ export const useRoomStore = defineStore('room', () => {
     currentParticipant,
     disconnectRealtime,
     error,
+    exportRoomSnapshot,
+    fetchAuditPage,
     fetchRoom,
     isRealtimeConnected,
     joinRoom,
     loading,
+    patchParticipantPermissions,
     lostRealtime,
     participants,
     refreshRoomSession,
