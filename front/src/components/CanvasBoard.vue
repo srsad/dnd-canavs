@@ -308,7 +308,7 @@ function addToken() {
   const cy = rect ? (rect.height / 2 - pan.value.y) / zoom.value : 120;
 
   const newToken: Token = {
-    id: crypto.randomUUID(),
+    id: window.crypto.randomUUID(),
     label: `T${localCanvas.value.tokens.length + 1}`,
     color: '#dc2626',
     x: cx + localCanvas.value.tokens.length * 20,
@@ -332,7 +332,7 @@ function startDrawing(event: PointerEvent) {
 
   const point = getRelativePoint(event);
   activeStroke = {
-    id: crypto.randomUUID(),
+    id: window.crypto.randomUUID(),
     color: brushColor.value,
     width: brushWidth.value,
     authorId: props.participantId,
@@ -400,7 +400,7 @@ function startFogErase(event: PointerEvent) {
 
   const point = getRelativePoint(event);
   activeFogStroke = {
-    id: crypto.randomUUID(),
+    id: window.crypto.randomUUID(),
     width: fogBrushWidth.value,
     authorId: props.participantId,
     points: [point],
@@ -661,7 +661,7 @@ async function onImageFileChange(event: Event) {
       '';
 
     const newImage: CanvasImage = {
-      id: crypto.randomUUID(),
+      id: window.crypto.randomUUID(),
       layerId,
       url: uploaded.publicUrl,
       x,
@@ -943,7 +943,7 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
       ? layers
       : [
           {
-            id: crypto.randomUUID(),
+            id: window.crypto.randomUUID(),
             name: 'Base',
             visible: true,
             strokes: legacyStrokes,
@@ -1083,7 +1083,7 @@ function ensureActiveLayer() {
       ...localCanvas.value,
       layers: [
         {
-          id: crypto.randomUUID(),
+          id: window.crypto.randomUUID(),
           name: 'Base',
           visible: true,
           strokes: [],
@@ -1103,7 +1103,7 @@ function ensureActiveLayer() {
 function addLayer() {
   if (!canMutateCanvas.value) return;
   const newLayer: CanvasLayer = {
-    id: crypto.randomUUID(),
+    id: window.crypto.randomUUID(),
     name: `Layer ${localCanvas.value.layers.length + 1}`,
     visible: true,
     strokes: [],

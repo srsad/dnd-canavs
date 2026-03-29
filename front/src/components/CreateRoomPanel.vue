@@ -16,7 +16,7 @@ function submit() {
   emit('create', {
     title: title.value,
     guestName: isGuestFlow.value ? guestName.value : undefined,
-    guestKey: isGuestFlow.value ? crypto.randomUUID() : undefined,
+    guestKey: isGuestFlow.value ? window.crypto.randomUUID() : undefined,
   });
 }
 </script>
