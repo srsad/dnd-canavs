@@ -10,6 +10,7 @@ import type {
   Token,
 } from '../types';
 import { uploadRoomCanvasImage } from '../lib/api';
+import CanvasBoardContextMenu from './CanvasBoardContextMenu.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -151,9 +152,69 @@ watch(
   },
 );
 
+const canvasMenuOpen = ref(false);
+const menuPosition = ref({ x: 0, y: 0 });
+const canvasContextMenuRef = ref<InstanceType<typeof CanvasBoardContextMenu> | null>(null);
+
+const MENU_VIEWPORT_MARGIN = 8;
+
+function clampMenuToViewport(x: number, y: number, width: number, height: number) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const maxX = vw - width - MENU_VIEWPORT_MARGIN;
+  const maxY = vh - height - MENU_VIEWPORT_MARGIN;
+  return {
+    x: Math.min(
+      Math.max(MENU_VIEWPORT_MARGIN, x),
+      Math.max(MENU_VIEWPORT_MARGIN, maxX),
+    ),
+    y: Math.min(
+      Math.max(MENU_VIEWPORT_MARGIN, y),
+      Math.max(MENU_VIEWPORT_MARGIN, maxY),
+    ),
+  };
+}
+
+async function handleBoardContextMenu(event: MouseEvent) {
+  event.preventDefault();
+  if (!(event.shiftKey || event.ctrlKey)) {
+    return;
+  }
+  menuPosition.value = { x: event.clientX, y: event.clientY };
+  canvasMenuOpen.value = true;
+  await nextTick();
+  const el = canvasContextMenuRef.value?.getMenuEl?.() ?? null;
+  if (el) {
+    const r = el.getBoundingClientRect();
+    menuPosition.value = clampMenuToViewport(event.clientX, event.clientY, r.width, r.height);
+  }
+}
+
+function closeCanvasMenu() {
+  canvasMenuOpen.value = false;
+}
+
+function onDocumentPointerDownCapture(e: PointerEvent) {
+  if (!canvasMenuOpen.value) {
+    return;
+  }
+  if (canvasContextMenuRef.value?.menuContainsTarget(e.target as Node)) {
+    return;
+  }
+  closeCanvasMenu();
+}
+
+function onDocumentKeyDown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && canvasMenuOpen.value) {
+    closeCanvasMenu();
+  }
+}
+
 let resizeObserver: ResizeObserver | null = null;
 
 onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDownCapture, true);
+  document.addEventListener('keydown', onDocumentKeyDown);
   const el = boardRef.value;
   if (!el) return;
   resizeObserver = new ResizeObserver((entries) => {
@@ -166,6 +227,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDownCapture, true);
+  document.removeEventListener('keydown', onDocumentKeyDown);
   resizeObserver?.disconnect();
   activeStroke = null;
   activeTokenId = null;
@@ -471,26 +534,24 @@ function removeSelectedImage() {
   selectedImageId.value = '';
 }
 
-function onSelectedImageWidthInput(ev: Event) {
-  const n = Number((ev.target as HTMLInputElement).value);
-  if (Number.isFinite(n)) {
-    patchSelectedImage({ width: Math.min(8192, Math.max(8, Math.round(n))) });
-  }
-}
-
-function onSelectedImageHeightInput(ev: Event) {
-  const n = Number((ev.target as HTMLInputElement).value);
-  if (Number.isFinite(n)) {
-    patchSelectedImage({ height: Math.min(8192, Math.max(8, Math.round(n))) });
-  }
-}
-
-function onSelectedImageRotationInput(ev: Event) {
-  let n = Number((ev.target as HTMLInputElement).value);
+function onMenuSelectedImageWidthChange(n: number) {
   if (!Number.isFinite(n)) {
     return;
   }
-  n = ((((n + 180) % 360) + 360) % 360) - 180;
+  patchSelectedImage({ width: Math.min(8192, Math.max(8, Math.round(n))) });
+}
+
+function onMenuSelectedImageHeightChange(n: number) {
+  if (!Number.isFinite(n)) {
+    return;
+  }
+  patchSelectedImage({ height: Math.min(8192, Math.max(8, Math.round(n))) });
+}
+
+function onMenuSelectedImageRotationChange(n: number) {
+  if (!Number.isFinite(n)) {
+    return;
+  }
   patchSelectedImage({ rotation: n });
 }
 
@@ -948,198 +1009,71 @@ function toggleFog() {
 
 <template>
   <section class="panel board-panel">
-    <div class="board-toolbar">
-      <p
-        v-if="canEdit !== false && !syncConnected"
-        class="toolbar-offline-hint"
-        role="status"
-      >
-        Редактирование недоступно без соединения с сервером.
-      </p>
-      <div v-if="canEdit !== false" class="toolbar-group">
-        <label class="field compact">
-          <span>Кисть</span>
-          <input v-model="brushColor" type="color" :disabled="!canMutateCanvas" />
-        </label>
-        <label class="field compact">
-          <span>Толщина</span>
-          <input v-model.number="brushWidth" type="range" min="2" max="12" :disabled="!canMutateCanvas" />
-        </label>
-      </div>
+    <input
+      ref="imageFileInputRef"
+      class="visually-hidden"
+      type="file"
+      accept="image/png,image/jpeg,image/webp,image/gif"
+      :disabled="!canMutateCanvas || imageUploading"
+      @change="onImageFileChange"
+    />
 
-      <div class="toolbar-group">
-        <template v-if="canEdit !== false">
-          <label class="field compact">
-            <span>Слой</span>
-            <select v-model="activeLayerId" :disabled="!canMutateCanvas">
-              <option v-for="layer in localCanvas.layers" :key="layer.id" :value="layer.id">
-                {{ layer.visible ? '👁 ' : '⛔ ' }}{{ layer.name }}
-              </option>
-            </select>
-          </label>
-          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="addLayer">
-            + слой
-          </button>
-          <button
-            v-if="activeLayer"
-            class="ghost-button"
-            type="button"
-            :disabled="!canMutateCanvas"
-            @click="toggleLayerVisibility(activeLayer.id)"
-          >
-            {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
-          </button>
-
-          <div class="segmented">
-            <button
-              type="button"
-              :class="{ active: toolMode === 'draw' }"
-              :disabled="!canMutateCanvas"
-              @click="toolMode = 'draw'"
-            >
-              Рисование
-            </button>
-            <button
-              type="button"
-              :class="{ active: toolMode === 'fog' }"
-              :disabled="!localCanvas.fogEnabled || !canMutateCanvas"
-              @click="toolMode = 'fog'"
-            >
-              Туман (стереть)
-            </button>
-          </div>
-        </template>
-
-        <div class="zoom-controls">
-          <button class="ghost-button zoom-btn" type="button" title="Приблизить" @click="zoomIn">+</button>
-          <span class="zoom-value">{{ Math.round(zoom * 100) }}%</span>
-          <button class="ghost-button zoom-btn" type="button" title="Отдалить" @click="zoomOut">−</button>
-          <button class="ghost-button zoom-btn" type="button" title="Сбросить вид" @click="resetView">⟲</button>
-        </div>
-
-        <template v-if="canEdit !== false && localCanvas.tokens.length">
-          <div class="toolbar-group token-assign-row">
-            <label class="field compact">
-              <span>Кому фишка</span>
-              <select v-model="assignTokenId" :disabled="!canMutateCanvas">
-                <option v-for="t in localCanvas.tokens" :key="t.id" :value="t.id">
-                  {{ t.label }}
-                </option>
-              </select>
-            </label>
-            <label class="field compact">
-              <span>Управление</span>
-              <select v-model="assignParticipantValue" :disabled="!canMutateCanvas">
-                <option value="">Только мастер</option>
-                <option v-for="p in participants" :key="p.id" :value="p.id">
-                  {{ p.displayName }}{{ p.role === 'gm' ? ' (мастер)' : '' }}
-                </option>
-              </select>
-            </label>
-            <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="applyTokenControl">
-              Назначить
-            </button>
-          </div>
-        </template>
-
-        <template v-if="canEdit !== false">
-          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="toggleGrid">
-            {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
-          </button>
-          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="toggleFog">
-            {{ localCanvas.fogEnabled ? 'Выключить туман' : 'Включить туман' }}
-          </button>
-          <label v-if="localCanvas.fogEnabled" class="field compact">
-            <span>Туман</span>
-            <input
-              v-model.number="fogBrushWidth"
-              type="range"
-              min="14"
-              max="120"
-              :disabled="!canMutateCanvas"
-            />
-          </label>
-          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="addToken">
-            Добавить фишку
-          </button>
-          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="clearBoard">
-            Очистить линии
-          </button>
-          <input
-            ref="imageFileInputRef"
-            class="visually-hidden"
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            :disabled="!canMutateCanvas || imageUploading"
-            @change="onImageFileChange"
-          />
-          <button
-            class="ghost-button"
-            type="button"
-            :disabled="!canMutateCanvas || imageUploading || !canUploadCanvasImage"
-            :title="!canUploadCanvasImage ? 'Нужна активная сессия комнаты' : ''"
-            @click="openImageFilePicker"
-          >
-            {{ imageUploading ? 'Загрузка…' : 'Изображение на холст' }}
-          </button>
-          <p v-if="imageUploadError" class="image-upload-error" role="alert">{{ imageUploadError }}</p>
-        </template>
-
-        <template v-if="canEdit !== false && selectedCanvasImage">
-          <div class="toolbar-group image-edit-row">
-            <span class="image-edit-label">Картинка</span>
-            <label class="field compact">
-              <span>Ширина</span>
-              <input
-                type="number"
-                min="8"
-                max="8192"
-                :value="Math.round(selectedCanvasImage.width)"
-                :disabled="!canMutateCanvas"
-                @change="onSelectedImageWidthInput"
-              />
-            </label>
-            <label class="field compact">
-              <span>Высота</span>
-              <input
-                type="number"
-                min="8"
-                max="8192"
-                :value="Math.round(selectedCanvasImage.height)"
-                :disabled="!canMutateCanvas"
-                @change="onSelectedImageHeightInput"
-              />
-            </label>
-            <label class="field compact">
-              <span>Поворот °</span>
-              <input
-                type="number"
-                min="-180"
-                max="180"
-                step="1"
-                :value="Math.round(selectedCanvasImage.rotation)"
-                :disabled="!canMutateCanvas"
-                @change="onSelectedImageRotationInput"
-              />
-            </label>
-            <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="removeSelectedImage">
-              Удалить картинку
-            </button>
-          </div>
-        </template>
-      </div>
-    </div>
+    <CanvasBoardContextMenu
+      ref="canvasContextMenuRef"
+      :open="canvasMenuOpen"
+      :position="menuPosition"
+      :can-edit="canEdit !== false"
+      :sync-connected="syncConnected"
+      :can-mutate-canvas="canMutateCanvas"
+      :canvas="localCanvas"
+      :brush-color="brushColor"
+      :brush-width="brushWidth"
+      :active-layer-id="activeLayerId"
+      :tool-mode="toolMode"
+      :assign-token-id="assignTokenId"
+      :assign-participant-value="assignParticipantValue"
+      :fog-brush-width="fogBrushWidth"
+      :zoom="zoom"
+      :participants="participants"
+      :active-layer="activeLayer ?? null"
+      :selected-canvas-image="selectedCanvasImage"
+      :image-uploading="imageUploading"
+      :image-upload-error="imageUploadError"
+      :can-upload-canvas-image="canUploadCanvasImage"
+      @update:brush-color="brushColor = $event"
+      @update:brush-width="brushWidth = $event"
+      @update:active-layer-id="activeLayerId = $event"
+      @update:tool-mode="toolMode = $event"
+      @update:assign-token-id="assignTokenId = $event"
+      @update:assign-participant-value="assignParticipantValue = $event"
+      @update:fog-brush-width="fogBrushWidth = $event"
+      @add-layer="addLayer"
+      @toggle-layer-visibility="toggleLayerVisibility($event)"
+      @zoom-in="zoomIn"
+      @zoom-out="zoomOut"
+      @reset-view="resetView"
+      @apply-token-control="applyTokenControl"
+      @toggle-grid="toggleGrid"
+      @toggle-fog="toggleFog"
+      @add-token="addToken"
+      @clear-board="clearBoard"
+      @open-image-file-picker="openImageFilePicker"
+      @remove-selected-image="removeSelectedImage"
+      @selected-image-width-change="onMenuSelectedImageWidthChange"
+      @selected-image-height-change="onMenuSelectedImageHeightChange"
+      @selected-image-rotation-change="onMenuSelectedImageRotationChange"
+    />
 
     <div
       ref="boardRef"
       class="board-surface"
-      title="Колёсико: zoom • Средняя/ПКМ: перетаскивание (бесконечный холст)"
+      title="Колёсико: масштаб • Средняя кнопка или ПКМ: перетаскивание • Shift+ПКМ или Ctrl+ПКМ: меню холста"
       @pointerdown="handlePointerDown"
       @pointermove="handlePointerMove"
       @pointerup="handlePointerUp"
       @pointerleave="handlePointerUp"
       @wheel.prevent="handleWheel"
-      @contextmenu.prevent
+      @contextmenu="handleBoardContextMenu"
     >
       <canvas
         ref="canvasRef"
@@ -1173,34 +1107,6 @@ function toggleFog() {
 </template>
 
 <style scoped>
-.toolbar-offline-hint {
-  flex-basis: 100%;
-  margin: 0;
-  padding: 10px 14px;
-  border-radius: 12px;
-  background: rgba(249, 115, 22, 0.12);
-  border-left: 3px solid #f97316;
-  font-size: 0.9rem;
-  color: #fed7aa;
-}
-
-.image-upload-error {
-  flex-basis: 100%;
-  margin: 0;
-  font-size: 0.85rem;
-  color: #fca5a5;
-}
-
-.image-edit-row {
-  align-items: flex-end;
-}
-
-.image-edit-label {
-  font-size: 0.8rem;
-  color: #94a3b8;
-  margin-right: 4px;
-}
-
 .canvas-image-wrap {
   position: absolute;
   box-sizing: border-box;
