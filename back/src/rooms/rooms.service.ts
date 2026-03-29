@@ -955,6 +955,7 @@ export class RoomsService {
       ],
       fogEnabled: false,
       fogStrokes: [],
+      canvasImages: [],
     };
   }
 
@@ -1051,6 +1052,47 @@ export class RoomsService {
         })
       : [];
 
+    const MIN_IMG = 8;
+    const MAX_IMG_DIM = 8192;
+    const canvasImagesInput = (canvas as unknown as { canvasImages?: unknown }).canvasImages;
+    const canvasImages = Array.isArray(canvasImagesInput)
+      ? (canvasImagesInput as unknown[])
+          .map((raw) => {
+            const img = raw as Partial<{
+              id: string;
+              url: string;
+              x: number;
+              y: number;
+              width: number;
+              height: number;
+              rotation: number;
+            }>;
+            const url = typeof img.url === 'string' ? img.url.trim() : '';
+            if (!url.startsWith('https://')) {
+              return null;
+            }
+            let w = Number(img.width);
+            let h = Number(img.height);
+            if (!Number.isFinite(w) || w < MIN_IMG) w = MIN_IMG;
+            if (!Number.isFinite(h) || h < MIN_IMG) h = MIN_IMG;
+            w = Math.min(w, MAX_IMG_DIM);
+            h = Math.min(h, MAX_IMG_DIM);
+            let rot = Number(img.rotation);
+            if (!Number.isFinite(rot)) rot = 0;
+            rot = ((((rot + 180) % 360) + 360) % 360) - 180;
+            return {
+              id: img.id || randomUUID(),
+              url,
+              x: Number(img.x) || 0,
+              y: Number(img.y) || 0,
+              width: w,
+              height: h,
+              rotation: rot,
+            };
+          })
+          .filter((x): x is NonNullable<typeof x> => x !== null)
+      : [];
+
     return {
       backgroundColor: canvas.backgroundColor || '#f8f1df',
       gridEnabled: Boolean(canvas.gridEnabled),
@@ -1074,6 +1116,7 @@ export class RoomsService {
           })
         : [],
       layers,
+      canvasImages,
       fogEnabled: Boolean((canvas as unknown as { fogEnabled?: unknown }).fogEnabled),
       fogStrokes,
     };

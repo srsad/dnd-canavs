@@ -18,6 +18,7 @@ import { MemoryRoomSessionStore } from './rooms/session/memory-room-session.stor
 import { RedisRoomSessionStore } from './rooms/session/redis-room-session.store';
 import { ROOM_SESSION_STORE } from './rooms/session/room-session.store';
 import { AppExceptionFilter } from './prisma/prisma-exception.filter';
+import { S3UploadService } from './storage/s3-upload.service';
 import Redis from 'ioredis';
 
 @Module({
@@ -84,6 +85,7 @@ import Redis from 'ioredis';
     },
     RoomsService,
     RoomsGateway,
+    S3UploadService,
   ],
 })
 export class AppModule {}

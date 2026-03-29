@@ -61,11 +61,22 @@ export type CanvasLayer = {
   strokes: Stroke[];
 };
 
+export type CanvasImage = {
+  id: string;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+};
+
 export type RoomCanvas = {
   backgroundColor: string;
   gridEnabled: boolean;
   tokens: Token[];
   layers: CanvasLayer[];
+  canvasImages?: CanvasImage[];
   fogEnabled?: boolean;
   fogStrokes?: Array<{
     id: string;

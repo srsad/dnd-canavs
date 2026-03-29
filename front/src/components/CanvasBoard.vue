@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type {
+  CanvasImage,
   CanvasLayer,
   Participant,
   RoomCanvas,
@@ -8,6 +9,7 @@ import type {
   StrokePoint,
   Token,
 } from '../types';
+import { uploadRoomCanvasImage } from '../lib/api';
 
 const props = withDefaults(
   defineProps<{
@@ -19,8 +21,21 @@ const props = withDefaults(
     /** When false, canvas mutations are blocked (e.g. WebSocket disconnected). */
     syncConnected?: boolean;
     participants?: Participant[];
+    /** Room slug for S3 presign API (canvas uploads). */
+    roomSlug?: string;
+    /** Session id from join; sent as X-Room-Session-Id. */
+    sessionId?: string;
+    /** Optional JWT for registered users (same as other room API calls). */
+    authToken?: string | null;
   }>(),
-  { participants: () => [], canMoveAnyToken: false, syncConnected: true },
+  {
+    participants: () => [],
+    canMoveAnyToken: false,
+    syncConnected: true,
+    roomSlug: '',
+    sessionId: '',
+    authToken: null,
+  },
 );
 
 const canMutateCanvas = computed(
@@ -53,6 +68,9 @@ let panStart = { x: 0, y: 0, panX: 0, panY: 0 };
 let isPanning = false;
 let activeStroke: Stroke | null = null;
 let activeTokenId: string | null = null;
+let activeImageId: string | null = null;
+/** World-space: imageCenter - pointer at drag start (keeps grab point under cursor). */
+let imageDragOffset = { x: 0, y: 0 };
 let activeFogStroke: { id: string; width: number; points: StrokePoint[]; authorId: string } | null =
   null;
 
@@ -60,6 +78,18 @@ const activeLayerId = ref<string>('');
 const toolMode = ref<'draw' | 'fog'>('draw');
 const assignTokenId = ref('');
 const assignParticipantValue = ref('');
+const selectedImageId = ref('');
+const imageFileInputRef = ref<HTMLInputElement | null>(null);
+const imageUploading = ref(false);
+const imageUploadError = ref('');
+
+const MAX_IMAGE_DISPLAY_WIDTH = 640;
+const ALLOWED_IMAGE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+]);
 
 function canDragToken(token: Token): boolean {
   if (!props.syncConnected) {
@@ -109,6 +139,18 @@ watch(assignTokenId, (tid) => {
   assignParticipantValue.value = t?.controlledByParticipantId ?? '';
 });
 
+watch(
+  () => (localCanvas.value.canvasImages ?? []).map((i) => i.id).join(','),
+  () => {
+    if (
+      selectedImageId.value &&
+      !(localCanvas.value.canvasImages ?? []).some((i) => i.id === selectedImageId.value)
+    ) {
+      selectedImageId.value = '';
+    }
+  },
+);
+
 let resizeObserver: ResizeObserver | null = null;
 
 onMounted(() => {
@@ -127,6 +169,8 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   activeStroke = null;
   activeTokenId = null;
+  activeImageId = null;
+  imageDragOffset = { x: 0, y: 0 };
 });
 
 function toggleGrid() {
@@ -380,11 +424,159 @@ function startTokenDrag(tokenId: string, event: PointerEvent) {
   activeTokenId = tokenId;
 }
 
+function startImageDrag(imageId: string, event: PointerEvent) {
+  event.stopPropagation();
+  if (!canMutateCanvas.value) {
+    return;
+  }
+  const img = (localCanvas.value.canvasImages ?? []).find((i) => i.id === imageId);
+  if (!img) {
+    return;
+  }
+  const p = getRelativePoint(event);
+  imageDragOffset = { x: img.x - p.x, y: img.y - p.y };
+  selectedImageId.value = imageId;
+  activeImageId = imageId;
+}
+
+function worldCenterForPlacement() {
+  const rect = boardRef.value?.getBoundingClientRect();
+  if (!rect) {
+    return { x: 200, y: 200 };
+  }
+  const cx = (rect.width / 2 - pan.value.x) / zoom.value;
+  const cy = (rect.height / 2 - pan.value.y) / zoom.value;
+  return { x: cx, y: cy };
+}
+
+function patchSelectedImage(patch: Partial<CanvasImage>) {
+  const id = selectedImageId.value;
+  if (!id || !canMutateCanvas.value) {
+    return;
+  }
+  const imgs = localCanvas.value.canvasImages ?? [];
+  const next = imgs.map((im) => (im.id === id ? { ...im, ...patch } : im));
+  updateCanvas({ ...localCanvas.value, canvasImages: next });
+}
+
+function removeSelectedImage() {
+  const id = selectedImageId.value;
+  if (!id || !canMutateCanvas.value) {
+    return;
+  }
+  updateCanvas({
+    ...localCanvas.value,
+    canvasImages: (localCanvas.value.canvasImages ?? []).filter((im) => im.id !== id),
+  });
+  selectedImageId.value = '';
+}
+
+function onSelectedImageWidthInput(ev: Event) {
+  const n = Number((ev.target as HTMLInputElement).value);
+  if (Number.isFinite(n)) {
+    patchSelectedImage({ width: Math.min(8192, Math.max(8, Math.round(n))) });
+  }
+}
+
+function onSelectedImageHeightInput(ev: Event) {
+  const n = Number((ev.target as HTMLInputElement).value);
+  if (Number.isFinite(n)) {
+    patchSelectedImage({ height: Math.min(8192, Math.max(8, Math.round(n))) });
+  }
+}
+
+function onSelectedImageRotationInput(ev: Event) {
+  let n = Number((ev.target as HTMLInputElement).value);
+  if (!Number.isFinite(n)) {
+    return;
+  }
+  n = ((((n + 180) % 360) + 360) % 360) - 180;
+  patchSelectedImage({ rotation: n });
+}
+
+const canUploadCanvasImage = computed(
+  () => Boolean(props.roomSlug?.trim() && props.sessionId?.trim()),
+);
+
+function openImageFilePicker() {
+  if (!canMutateCanvas.value || imageUploading.value) {
+    return;
+  }
+  imageUploadError.value = '';
+  imageFileInputRef.value?.click();
+}
+
+async function onImageFileChange(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) {
+    return;
+  }
+  if (!props.roomSlug?.trim() || !props.sessionId?.trim()) {
+    imageUploadError.value = 'Нет сессии комнаты для загрузки.';
+    return;
+  }
+  if (!canMutateCanvas.value) {
+    return;
+  }
+
+  const contentType = file.type || 'image/png';
+  if (!ALLOWED_IMAGE_TYPES.has(contentType)) {
+    imageUploadError.value = 'Допустимы PNG, JPEG, WebP или GIF.';
+    return;
+  }
+
+  imageUploading.value = true;
+  imageUploadError.value = '';
+
+  try {
+    const bitmap = await createImageBitmap(file);
+    const nw = bitmap.width;
+    const nh = bitmap.height;
+    bitmap.close();
+
+    const uploaded = await uploadRoomCanvasImage(
+      props.roomSlug.trim(),
+      props.sessionId.trim(),
+      file,
+      props.authToken ?? undefined,
+    );
+
+    const scale = Math.min(1, MAX_IMAGE_DISPLAY_WIDTH / Math.max(nw, 1));
+    const w = Math.max(8, Math.round(nw * scale));
+    const h = Math.max(8, Math.round(nh * scale));
+    const { x, y } = worldCenterForPlacement();
+
+    const newImage: CanvasImage = {
+      id: crypto.randomUUID(),
+      url: uploaded.publicUrl,
+      x,
+      y,
+      width: w,
+      height: h,
+      rotation: 0,
+    };
+
+    updateCanvas({
+      ...localCanvas.value,
+      canvasImages: [...(localCanvas.value.canvasImages ?? []), newImage],
+    });
+    selectedImageId.value = newImage.id;
+  } catch (err) {
+    imageUploadError.value =
+      err instanceof Error ? err.message : 'Не удалось загрузить изображение.';
+  } finally {
+    imageUploading.value = false;
+  }
+}
+
 function handlePointerDown(event: PointerEvent) {
   if (event.button === 1 || event.button === 2) {
     startPointerDown(event);
   } else if (event.button === 0 && !activeTokenId) {
     if (!canMutateCanvas.value) return;
+    selectedImageId.value = '';
     if (toolMode.value === 'fog') startFogErase(event);
     else startDrawing(event);
   }
@@ -392,7 +584,7 @@ function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   if (handlePanMove(event)) return;
-  if (!activeTokenId && !canMutateCanvas.value) {
+  if (!activeTokenId && !activeImageId && !canMutateCanvas.value) {
     return;
   }
   if (activeTokenId) {
@@ -415,6 +607,24 @@ function handlePointerMove(event: PointerEvent) {
     return;
   }
 
+  if (activeImageId) {
+    const point = getRelativePoint(event);
+    localCanvas.value = {
+      ...localCanvas.value,
+      canvasImages: (localCanvas.value.canvasImages ?? []).map((im) =>
+        im.id === activeImageId
+          ? {
+              ...im,
+              x: point.x + imageDragOffset.x,
+              y: point.y + imageDragOffset.y,
+            }
+          : im,
+      ),
+    };
+    renderCanvas();
+    return;
+  }
+
   if (toolMode.value === 'fog') eraseFog(event);
   else draw(event);
 }
@@ -429,6 +639,12 @@ function finishInteraction() {
       updateCanvas(localCanvas.value);
     }
     activeTokenId = null;
+  }
+
+  if (activeImageId) {
+    updateCanvas(localCanvas.value);
+    activeImageId = null;
+    imageDragOffset = { x: 0, y: 0 };
   }
 
   finishFogErase();
@@ -604,6 +820,10 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
           },
         ];
 
+  const imgs = Array.isArray(value.canvasImages)
+    ? value.canvasImages.map((img) => ({ ...img }))
+    : [];
+
   return {
     backgroundColor: value.backgroundColor,
     gridEnabled: value.gridEnabled,
@@ -612,6 +832,7 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
       controlledByParticipantId: token.controlledByParticipantId,
     })),
     layers: normalizedLayers,
+    canvasImages: imgs,
     fogEnabled: Boolean(value.fogEnabled),
     fogStrokes: Array.isArray(value.fogStrokes)
       ? value.fogStrokes.map((stroke) => ({
@@ -635,6 +856,32 @@ const tokenStyle = computed(() =>
   })),
 );
 
+const imageOverlayStyles = computed(() => {
+  const px = pan.value.x;
+  const py = pan.value.y;
+  const zf = zoom.value;
+  return (localCanvas.value.canvasImages ?? []).map((img) => ({
+    id: img.id,
+    img,
+    box: {
+      left: `${px + img.x * zf - (img.width * zf) / 2}px`,
+      top: `${py + img.y * zf - (img.height * zf) / 2}px`,
+      width: `${img.width * zf}px`,
+      height: `${img.height * zf}px`,
+      transform: `rotate(${img.rotation}deg)`,
+    },
+    selected: selectedImageId.value === img.id,
+  }));
+});
+
+const selectedCanvasImage = computed(() => {
+  const id = selectedImageId.value;
+  if (!id) {
+    return null;
+  }
+  return (localCanvas.value.canvasImages ?? []).find((im) => im.id === id) ?? null;
+});
+
 const activeLayer = computed(() => {
   const id = activeLayerId.value;
   return localCanvas.value.layers.find((layer) => layer.id === id) ?? localCanvas.value.layers[0];
@@ -652,6 +899,7 @@ function ensureActiveLayer() {
           strokes: [],
         },
       ],
+      canvasImages: localCanvas.value.canvasImages ?? [],
       fogEnabled: Boolean(localCanvas.value.fogEnabled),
       fogStrokes: localCanvas.value.fogStrokes ?? [],
     };
@@ -817,6 +1065,67 @@ function toggleFog() {
           <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="clearBoard">
             Очистить линии
           </button>
+          <input
+            ref="imageFileInputRef"
+            class="visually-hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            :disabled="!canMutateCanvas || imageUploading"
+            @change="onImageFileChange"
+          />
+          <button
+            class="ghost-button"
+            type="button"
+            :disabled="!canMutateCanvas || imageUploading || !canUploadCanvasImage"
+            :title="!canUploadCanvasImage ? 'Нужна активная сессия комнаты' : ''"
+            @click="openImageFilePicker"
+          >
+            {{ imageUploading ? 'Загрузка…' : 'Изображение на холст' }}
+          </button>
+          <p v-if="imageUploadError" class="image-upload-error" role="alert">{{ imageUploadError }}</p>
+        </template>
+
+        <template v-if="canEdit !== false && selectedCanvasImage">
+          <div class="toolbar-group image-edit-row">
+            <span class="image-edit-label">Картинка</span>
+            <label class="field compact">
+              <span>Ширина</span>
+              <input
+                type="number"
+                min="8"
+                max="8192"
+                :value="Math.round(selectedCanvasImage.width)"
+                :disabled="!canMutateCanvas"
+                @change="onSelectedImageWidthInput"
+              />
+            </label>
+            <label class="field compact">
+              <span>Высота</span>
+              <input
+                type="number"
+                min="8"
+                max="8192"
+                :value="Math.round(selectedCanvasImage.height)"
+                :disabled="!canMutateCanvas"
+                @change="onSelectedImageHeightInput"
+              />
+            </label>
+            <label class="field compact">
+              <span>Поворот °</span>
+              <input
+                type="number"
+                min="-180"
+                max="180"
+                step="1"
+                :value="Math.round(selectedCanvasImage.rotation)"
+                :disabled="!canMutateCanvas"
+                @change="onSelectedImageRotationInput"
+              />
+            </label>
+            <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="removeSelectedImage">
+              Удалить картинку
+            </button>
+          </div>
         </template>
       </div>
     </div>
@@ -838,6 +1147,16 @@ function toggleFog() {
         :width="viewportSize.width"
         :height="viewportSize.height"
       />
+      <div
+        v-for="row in imageOverlayStyles"
+        :key="row.id"
+        class="canvas-image-wrap"
+        :class="{ selected: row.selected }"
+        :style="row.box"
+        @pointerdown="startImageDrag(row.id, $event)"
+      >
+        <img class="canvas-image-img" :src="row.img.url" alt="" draggable="false" />
+      </div>
       <button
         v-for="token in tokenStyle"
         :key="token.id"
@@ -863,5 +1182,51 @@ function toggleFog() {
   border-left: 3px solid #f97316;
   font-size: 0.9rem;
   color: #fed7aa;
+}
+
+.image-upload-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.85rem;
+  color: #fca5a5;
+}
+
+.image-edit-row {
+  align-items: flex-end;
+}
+
+.image-edit-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  margin-right: 4px;
+}
+
+.canvas-image-wrap {
+  position: absolute;
+  box-sizing: border-box;
+  transform-origin: center center;
+  pointer-events: auto;
+  cursor: grab;
+  z-index: 1;
+}
+
+.canvas-image-wrap.selected {
+  outline: 2px solid #a78bfa;
+  outline-offset: 2px;
+}
+
+.canvas-image-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.25);
+}
+
+.token-chip {
+  z-index: 2;
 }
 </style>

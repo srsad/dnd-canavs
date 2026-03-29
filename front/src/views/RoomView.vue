@@ -33,6 +33,7 @@ const canvasModel = computed<RoomCanvas>({
       gridEnabled: true,
       tokens: [],
       layers: [],
+      canvasImages: [],
       fogEnabled: false,
       fogStrokes: [],
     };
@@ -264,6 +265,9 @@ async function fullSessionRefresh() {
         :can-move-any-token="Boolean(perms?.moveAnyToken)"
         :sync-connected="canUseRealtime"
         :participants="roomStore.participants"
+        :room-slug="slug"
+        :session-id="roomStore.sessionId ?? ''"
+        :auth-token="authStore.accessToken"
         @commit-token-moves="roomStore.moveTokens"
       />
 
