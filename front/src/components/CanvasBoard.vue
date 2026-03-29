@@ -16,9 +16,15 @@ const props = withDefaults(
     canEdit?: boolean;
     /** Move any token without full canvas edit (ACL). */
     canMoveAnyToken?: boolean;
+    /** When false, canvas mutations are blocked (e.g. WebSocket disconnected). */
+    syncConnected?: boolean;
     participants?: Participant[];
   }>(),
-  { participants: () => [], canMoveAnyToken: false },
+  { participants: () => [], canMoveAnyToken: false, syncConnected: true },
+);
+
+const canMutateCanvas = computed(
+  () => props.canEdit !== false && props.syncConnected,
 );
 
 const emit = defineEmits<{
@@ -56,6 +62,9 @@ const assignTokenId = ref('');
 const assignParticipantValue = ref('');
 
 function canDragToken(token: Token): boolean {
+  if (!props.syncConnected) {
+    return false;
+  }
   if (props.canEdit || props.canMoveAnyToken) {
     return true;
   }
@@ -121,7 +130,7 @@ onBeforeUnmount(() => {
 });
 
 function toggleGrid() {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   updateCanvas({
     ...localCanvas.value,
     gridEnabled: !localCanvas.value.gridEnabled,
@@ -129,7 +138,7 @@ function toggleGrid() {
 }
 
 function clearBoard() {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   const layerId = activeLayerId.value;
   updateCanvas({
     ...localCanvas.value,
@@ -140,7 +149,7 @@ function clearBoard() {
 }
 
 function addToken() {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   const rect = boardRef.value?.getBoundingClientRect();
   const cx = rect ? (rect.width / 2 - pan.value.x) / zoom.value : 120;
   const cy = rect ? (rect.height / 2 - pan.value.y) / zoom.value : 120;
@@ -164,7 +173,7 @@ function startDrawing(event: PointerEvent) {
   if (activeTokenId || isPanning) {
     return;
   }
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   if (toolMode.value !== 'draw') return;
   if (!activeLayerId.value) return;
 
@@ -232,7 +241,7 @@ function finishDrawing() {
 
 function startFogErase(event: PointerEvent) {
   if (activeTokenId || isPanning) return;
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   if (toolMode.value !== 'fog') return;
   if (!localCanvas.value.fogEnabled) return;
 
@@ -375,7 +384,7 @@ function handlePointerDown(event: PointerEvent) {
   if (event.button === 1 || event.button === 2) {
     startPointerDown(event);
   } else if (event.button === 0 && !activeTokenId) {
-    if (props.canEdit === false) return;
+    if (!canMutateCanvas.value) return;
     if (toolMode.value === 'fog') startFogErase(event);
     else startDrawing(event);
   }
@@ -383,7 +392,7 @@ function handlePointerDown(event: PointerEvent) {
 
 function handlePointerMove(event: PointerEvent) {
   if (handlePanMove(event)) return;
-  if (props.canEdit === false && !activeTokenId) {
+  if (!activeTokenId && !canMutateCanvas.value) {
     return;
   }
   if (activeTokenId) {
@@ -427,7 +436,7 @@ function finishInteraction() {
 }
 
 function applyTokenControl() {
-  if (props.canEdit === false || !assignTokenId.value) {
+  if (!canMutateCanvas.value || !assignTokenId.value) {
     return;
   }
   const pid = assignParticipantValue.value.trim();
@@ -654,7 +663,7 @@ function ensureActiveLayer() {
 }
 
 function addLayer() {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   const newLayer: CanvasLayer = {
     id: crypto.randomUUID(),
     name: `Layer ${localCanvas.value.layers.length + 1}`,
@@ -669,7 +678,7 @@ function addLayer() {
 }
 
 function toggleLayerVisibility(layerId: string) {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   updateCanvas({
     ...localCanvas.value,
     layers: localCanvas.value.layers.map((layer) =>
@@ -679,7 +688,7 @@ function toggleLayerVisibility(layerId: string) {
 }
 
 function toggleFog() {
-  if (props.canEdit === false) return;
+  if (!canMutateCanvas.value) return;
   updateCanvas({
     ...localCanvas.value,
     fogEnabled: !localCanvas.value.fogEnabled,
@@ -692,14 +701,21 @@ function toggleFog() {
 <template>
   <section class="panel board-panel">
     <div class="board-toolbar">
+      <p
+        v-if="canEdit !== false && !syncConnected"
+        class="toolbar-offline-hint"
+        role="status"
+      >
+        Редактирование недоступно без соединения с сервером.
+      </p>
       <div v-if="canEdit !== false" class="toolbar-group">
         <label class="field compact">
           <span>Кисть</span>
-          <input v-model="brushColor" type="color" />
+          <input v-model="brushColor" type="color" :disabled="!canMutateCanvas" />
         </label>
         <label class="field compact">
           <span>Толщина</span>
-          <input v-model.number="brushWidth" type="range" min="2" max="12" />
+          <input v-model.number="brushWidth" type="range" min="2" max="12" :disabled="!canMutateCanvas" />
         </label>
       </div>
 
@@ -707,30 +723,38 @@ function toggleFog() {
         <template v-if="canEdit !== false">
           <label class="field compact">
             <span>Слой</span>
-            <select v-model="activeLayerId">
+            <select v-model="activeLayerId" :disabled="!canMutateCanvas">
               <option v-for="layer in localCanvas.layers" :key="layer.id" :value="layer.id">
                 {{ layer.visible ? '👁 ' : '⛔ ' }}{{ layer.name }}
               </option>
             </select>
           </label>
-          <button class="ghost-button" type="button" @click="addLayer">+ слой</button>
+          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="addLayer">
+            + слой
+          </button>
           <button
             v-if="activeLayer"
             class="ghost-button"
             type="button"
+            :disabled="!canMutateCanvas"
             @click="toggleLayerVisibility(activeLayer.id)"
           >
             {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
           </button>
 
           <div class="segmented">
-            <button type="button" :class="{ active: toolMode === 'draw' }" @click="toolMode = 'draw'">
+            <button
+              type="button"
+              :class="{ active: toolMode === 'draw' }"
+              :disabled="!canMutateCanvas"
+              @click="toolMode = 'draw'"
+            >
               Рисование
             </button>
             <button
               type="button"
               :class="{ active: toolMode === 'fog' }"
-              :disabled="!localCanvas.fogEnabled"
+              :disabled="!localCanvas.fogEnabled || !canMutateCanvas"
               @click="toolMode = 'fog'"
             >
               Туман (стереть)
@@ -749,7 +773,7 @@ function toggleFog() {
           <div class="toolbar-group token-assign-row">
             <label class="field compact">
               <span>Кому фишка</span>
-              <select v-model="assignTokenId">
+              <select v-model="assignTokenId" :disabled="!canMutateCanvas">
                 <option v-for="t in localCanvas.tokens" :key="t.id" :value="t.id">
                   {{ t.label }}
                 </option>
@@ -757,32 +781,42 @@ function toggleFog() {
             </label>
             <label class="field compact">
               <span>Управление</span>
-              <select v-model="assignParticipantValue">
+              <select v-model="assignParticipantValue" :disabled="!canMutateCanvas">
                 <option value="">Только мастер</option>
                 <option v-for="p in participants" :key="p.id" :value="p.id">
                   {{ p.displayName }}{{ p.role === 'gm' ? ' (мастер)' : '' }}
                 </option>
               </select>
             </label>
-            <button class="ghost-button" type="button" @click="applyTokenControl">
+            <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="applyTokenControl">
               Назначить
             </button>
           </div>
         </template>
 
         <template v-if="canEdit !== false">
-          <button class="ghost-button" type="button" @click="toggleGrid">
+          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="toggleGrid">
             {{ localCanvas.gridEnabled ? 'Скрыть сетку' : 'Показать сетку' }}
           </button>
-          <button class="ghost-button" type="button" @click="toggleFog">
+          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="toggleFog">
             {{ localCanvas.fogEnabled ? 'Выключить туман' : 'Включить туман' }}
           </button>
           <label v-if="localCanvas.fogEnabled" class="field compact">
             <span>Туман</span>
-            <input v-model.number="fogBrushWidth" type="range" min="14" max="120" />
+            <input
+              v-model.number="fogBrushWidth"
+              type="range"
+              min="14"
+              max="120"
+              :disabled="!canMutateCanvas"
+            />
           </label>
-          <button class="ghost-button" type="button" @click="addToken">Добавить фишку</button>
-          <button class="ghost-button" type="button" @click="clearBoard">Очистить линии</button>
+          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="addToken">
+            Добавить фишку
+          </button>
+          <button class="ghost-button" type="button" :disabled="!canMutateCanvas" @click="clearBoard">
+            Очистить линии
+          </button>
         </template>
       </div>
     </div>
@@ -810,6 +844,7 @@ function toggleFog() {
         class="token-chip"
         :style="token.style"
         type="button"
+        :disabled="!canDragToken(token)"
         @pointerdown="startTokenDrag(token.id, $event)"
       >
         {{ token.label }}
@@ -817,3 +852,16 @@ function toggleFog() {
     </div>
   </section>
 </template>
+
+<style scoped>
+.toolbar-offline-hint {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(249, 115, 22, 0.12);
+  border-left: 3px solid #f97316;
+  font-size: 0.9rem;
+  color: #fed7aa;
+}
+</style>

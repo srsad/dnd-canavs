@@ -32,6 +32,8 @@ export const useRoomStore = defineStore('room', () => {
   const error = ref<string | null>(null);
   const socket = shallowRef<Socket | null>(null);
   const lostRealtime = ref(false);
+  /** Synced from Socket.IO connect/disconnect — not `socket.connected` in a computed (shallowRef + in-place mutation breaks reactivity). */
+  const realtimeConnected = ref(false);
 
   async function fetchRoom(slug: string) {
     loading.value = true;
@@ -217,11 +219,13 @@ export const useRoomStore = defineStore('room', () => {
 
     nextSocket.on('connect', () => {
       lostRealtime.value = false;
+      realtimeConnected.value = true;
       error.value = null;
     });
 
     nextSocket.on('disconnect', () => {
       lostRealtime.value = true;
+      realtimeConnected.value = false;
     });
 
     nextSocket.on('connect_error', () => {
@@ -230,6 +234,7 @@ export const useRoomStore = defineStore('room', () => {
 
     socket.value = nextSocket;
 
+    realtimeConnected.value = nextSocket.connected;
     if (nextSocket.connected) {
       lostRealtime.value = false;
     }
@@ -282,6 +287,7 @@ export const useRoomStore = defineStore('room', () => {
   function disconnectRealtime() {
     socket.value?.disconnect();
     socket.value = null;
+    realtimeConnected.value = false;
   }
 
   function reset() {
@@ -292,11 +298,12 @@ export const useRoomStore = defineStore('room', () => {
     sessionId.value = null;
     error.value = null;
     lostRealtime.value = false;
+    realtimeConnected.value = false;
   }
 
   const canConnect = computed(() => Boolean(room.value && sessionId.value));
 
-  const isRealtimeConnected = computed(() => Boolean(socket.value?.connected));
+  const isRealtimeConnected = computed(() => realtimeConnected.value);
 
   let syncTimerId = 0;
 

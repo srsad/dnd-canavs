@@ -260,8 +260,9 @@ async function fullSessionRefresh() {
       <CanvasBoard
         v-model="canvasModel"
         :participant-id="roomStore.currentParticipant?.id ?? 'unknown'"
-        :can-edit="Boolean(perms?.editCanvas && canUseRealtime)"
-        :can-move-any-token="Boolean(perms?.moveAnyToken && canUseRealtime)"
+        :can-edit="Boolean(perms?.editCanvas)"
+        :can-move-any-token="Boolean(perms?.moveAnyToken)"
+        :sync-connected="canUseRealtime"
         :participants="roomStore.participants"
         @commit-token-moves="roomStore.moveTokens"
       />
