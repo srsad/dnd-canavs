@@ -19,6 +19,8 @@ const props = defineProps<{
   zoom: number;
   participants: Participant[];
   activeLayer: CanvasLayer | null;
+  canMoveLayerUp: boolean;
+  canMoveLayerDown: boolean;
   selectedCanvasImage: CanvasImage | null;
   imageUploading: boolean;
   imageUploadError: string;
@@ -34,6 +36,8 @@ const emit = defineEmits<{
   'update:assignParticipantValue': [value: string];
   'update:fogBrushWidth': [value: number];
   addLayer: [];
+  moveLayerUp: [];
+  moveLayerDown: [];
   toggleLayerVisibility: [layerId: string];
   zoomIn: [];
   zoomOut: [];
@@ -152,6 +156,26 @@ function onSelectedImageRotationInput(ev: Event) {
           >
             {{ activeLayer.visible ? 'Скрыть слой' : 'Показать слой' }}
           </button>
+          <div class="layer-order-row">
+            <button
+              class="ghost-button"
+              type="button"
+              title="Слой выше (перекрывает нижележащие)"
+              :disabled="!canMutateCanvas || !canMoveLayerUp"
+              @click="emit('moveLayerUp')"
+            >
+              Выше
+            </button>
+            <button
+              class="ghost-button"
+              type="button"
+              title="Слой ниже (под верхними слоями)"
+              :disabled="!canMutateCanvas || !canMoveLayerDown"
+              @click="emit('moveLayerDown')"
+            >
+              Ниже
+            </button>
+          </div>
 
           <div class="segmented">
             <button
@@ -364,5 +388,12 @@ function onSelectedImageRotationInput(ev: Event) {
   font-size: 0.8rem;
   color: #94a3b8;
   margin-right: 4px;
+}
+
+.layer-order-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 </style>

@@ -1060,6 +1060,7 @@ export class RoomsService {
           .map((raw) => {
             const img = raw as Partial<{
               id: string;
+              layerId: string;
               url: string;
               x: number;
               y: number;
@@ -1071,6 +1072,9 @@ export class RoomsService {
             if (!url.startsWith('https://')) {
               return null;
             }
+            const layerIdSet = new Set(layers.map((l) => l.id));
+            const rawLayerId = typeof img.layerId === 'string' ? img.layerId.trim() : '';
+            const layerId = layerIdSet.has(rawLayerId) ? rawLayerId : (layers[0]?.id ?? '');
             let w = Number(img.width);
             let h = Number(img.height);
             if (!Number.isFinite(w) || w < MIN_IMG) w = MIN_IMG;
@@ -1082,6 +1086,7 @@ export class RoomsService {
             rot = ((((rot + 180) % 360) + 360) % 360) - 180;
             return {
               id: img.id || randomUUID(),
+              layerId,
               url,
               x: Number(img.x) || 0,
               y: Number(img.y) || 0,

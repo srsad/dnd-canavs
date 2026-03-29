@@ -62,6 +62,8 @@ export type CanvasLayer = {
 
 export type CanvasImage = {
   id: string;
+  /** Layer id; images stack with layer order (same as strokes). */
+  layerId: string;
   url: string;
   x: number;
   y: number;

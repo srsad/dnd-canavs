@@ -92,6 +92,43 @@ const ALLOWED_IMAGE_TYPES = new Set([
   'image/gif',
 ]);
 
+const canvasImageElementCache = new Map<string, HTMLImageElement>();
+
+function imageUrlIsAppOrigin(url: string): boolean {
+  try {
+    return new URL(url, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function preloadCanvasImageUrls(urls: string[]) {
+  for (const url of urls) {
+    if (!url) continue;
+    const existing = canvasImageElementCache.get(url);
+    if (existing?.complete && existing.naturalWidth > 0) continue;
+    if (existing) continue;
+    const el = new Image();
+    // S3/public URLs usually have no CORS for GET; anonymous would block the load.
+    // Same-origin (e.g. API proxy) can use anonymous to keep the bitmap origin-clean.
+    if (imageUrlIsAppOrigin(url)) {
+      el.crossOrigin = 'anonymous';
+    }
+    el.onload = () => renderCanvas();
+    el.onerror = () => renderCanvas();
+    canvasImageElementCache.set(url, el);
+    el.src = url;
+  }
+}
+
+function resolveImageLayerId(canvas: RoomCanvas, img: CanvasImage): string {
+  const lid = img.layerId;
+  if (typeof lid === 'string' && canvas.layers.some((l) => l.id === lid)) {
+    return lid;
+  }
+  return canvas.layers[0]?.id ?? '';
+}
+
 function canDragToken(token: Token): boolean {
   if (!props.syncConnected) {
     return false;
@@ -150,6 +187,15 @@ watch(
       selectedImageId.value = '';
     }
   },
+);
+
+watch(
+  () => [...new Set((localCanvas.value.canvasImages ?? []).map((i) => i.url))].sort().join('\0'),
+  () => {
+    preloadCanvasImageUrls([...new Set((localCanvas.value.canvasImages ?? []).map((i) => i.url))]);
+    nextTick(() => renderCanvas());
+  },
+  { immediate: true },
 );
 
 const canvasMenuOpen = ref(false);
@@ -609,8 +655,14 @@ async function onImageFileChange(event: Event) {
     const h = Math.max(8, Math.round(nh * scale));
     const { x, y } = worldCenterForPlacement();
 
+    const layerId =
+      activeLayerId.value.trim() ||
+      localCanvas.value.layers[0]?.id ||
+      '';
+
     const newImage: CanvasImage = {
       id: crypto.randomUUID(),
+      layerId,
       url: uploaded.publicUrl,
       x,
       y,
@@ -802,6 +854,23 @@ function renderCanvas() {
       });
       context.stroke();
     }
+
+    const layerImages = (localCanvas.value.canvasImages ?? []).filter(
+      (im) => resolveImageLayerId(localCanvas.value, im) === layer.id,
+    );
+    for (const im of layerImages) {
+      const el = canvasImageElementCache.get(im.url);
+      if (!el?.complete || !el.naturalWidth) continue;
+      context.save();
+      context.translate(im.x, im.y);
+      context.rotate((im.rotation * Math.PI) / 180);
+      try {
+        context.drawImage(el, -im.width / 2, -im.height / 2, im.width, im.height);
+      } catch {
+        /* CORS / decode */
+      }
+      context.restore();
+    }
   }
 
   if (localCanvas.value.fogEnabled) {
@@ -881,8 +950,17 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
           },
         ];
 
+  const baseLayerId = normalizedLayers[0]?.id ?? '';
   const imgs = Array.isArray(value.canvasImages)
-    ? value.canvasImages.map((img) => ({ ...img }))
+    ? value.canvasImages.map((raw) => {
+        const img = raw as CanvasImage;
+        const ok =
+          typeof img.layerId === 'string' && normalizedLayers.some((l) => l.id === img.layerId);
+        return {
+          ...img,
+          layerId: ok ? img.layerId : baseLayerId,
+        };
+      })
     : [];
 
   return {
@@ -918,21 +996,35 @@ const tokenStyle = computed(() =>
 );
 
 const imageOverlayStyles = computed(() => {
+  const canvas = localCanvas.value;
   const px = pan.value.x;
   const py = pan.value.y;
   const zf = zoom.value;
-  return (localCanvas.value.canvasImages ?? []).map((img) => ({
-    id: img.id,
-    img,
-    box: {
-      left: `${px + img.x * zf - (img.width * zf) / 2}px`,
-      top: `${py + img.y * zf - (img.height * zf) / 2}px`,
-      width: `${img.width * zf}px`,
-      height: `${img.height * zf}px`,
-      transform: `rotate(${img.rotation}deg)`,
-    },
-    selected: selectedImageId.value === img.id,
-  }));
+  const layerOrder = new Map(canvas.layers.map((l, i) => [l.id, i]));
+
+  const withMeta = (canvas.canvasImages ?? []).map((img, idx) => {
+    const layerId = resolveImageLayerId(canvas, img);
+    const layerIndex = layerOrder.get(layerId) ?? 0;
+    const layer = canvas.layers[layerIndex];
+    return { img, idx, layerIndex, layerVisible: layer?.visible !== false };
+  });
+
+  return withMeta
+    .filter((x) => x.layerVisible)
+    .sort((a, b) => a.layerIndex - b.layerIndex || a.idx - b.idx)
+    .map(({ img, layerIndex }) => ({
+      id: img.id,
+      img,
+      box: {
+        left: `${px + img.x * zf - (img.width * zf) / 2}px`,
+        top: `${py + img.y * zf - (img.height * zf) / 2}px`,
+        width: `${img.width * zf}px`,
+        height: `${img.height * zf}px`,
+        transform: `rotate(${img.rotation}deg)`,
+        zIndex: 10 + layerIndex,
+      },
+      selected: selectedImageId.value === img.id,
+    }));
 });
 
 const selectedCanvasImage = computed(() => {
@@ -947,6 +1039,43 @@ const activeLayer = computed(() => {
   const id = activeLayerId.value;
   return localCanvas.value.layers.find((layer) => layer.id === id) ?? localCanvas.value.layers[0];
 });
+
+const activeLayerIndex = computed(() =>
+  localCanvas.value.layers.findIndex((l) => l.id === activeLayerId.value),
+);
+
+/** Вверх = ближе к зрителю (больший индекс в массиве). Слой с индексом 0 не двигается. */
+const canMoveLayerUp = computed(() => {
+  const i = activeLayerIndex.value;
+  const n = localCanvas.value.layers.length;
+  return i > 0 && i < n - 1;
+});
+
+/** Вниз без обмена с индексом 0 (база всегда снизу). */
+const canMoveLayerDown = computed(() => {
+  const i = activeLayerIndex.value;
+  return i > 1;
+});
+
+function moveActiveLayerUp() {
+  if (!canMutateCanvas.value) return;
+  const layers = localCanvas.value.layers;
+  const i = activeLayerIndex.value;
+  if (i <= 0 || i >= layers.length - 1) return;
+  const next = layers.slice();
+  [next[i], next[i + 1]] = [next[i + 1]!, next[i]!];
+  updateCanvas({ ...localCanvas.value, layers: next });
+}
+
+function moveActiveLayerDown() {
+  if (!canMutateCanvas.value) return;
+  const layers = localCanvas.value.layers;
+  const i = activeLayerIndex.value;
+  if (i <= 1) return;
+  const next = layers.slice();
+  [next[i], next[i - 1]] = [next[i - 1]!, next[i]!];
+  updateCanvas({ ...localCanvas.value, layers: next });
+}
 
 function ensureActiveLayer() {
   if (!Array.isArray(localCanvas.value.layers) || localCanvas.value.layers.length === 0) {
@@ -1036,6 +1165,8 @@ function toggleFog() {
       :zoom="zoom"
       :participants="participants"
       :active-layer="activeLayer ?? null"
+      :can-move-layer-up="canMoveLayerUp"
+      :can-move-layer-down="canMoveLayerDown"
       :selected-canvas-image="selectedCanvasImage"
       :image-uploading="imageUploading"
       :image-upload-error="imageUploadError"
@@ -1048,6 +1179,8 @@ function toggleFog() {
       @update:assign-participant-value="assignParticipantValue = $event"
       @update:fog-brush-width="fogBrushWidth = $event"
       @add-layer="addLayer"
+      @move-layer-up="moveActiveLayerUp"
+      @move-layer-down="moveActiveLayerDown"
       @toggle-layer-visibility="toggleLayerVisibility($event)"
       @zoom-in="zoomIn"
       @zoom-out="zoomOut"
@@ -1087,10 +1220,9 @@ function toggleFog() {
         class="canvas-image-wrap"
         :class="{ selected: row.selected }"
         :style="row.box"
+        role="presentation"
         @pointerdown="startImageDrag(row.id, $event)"
-      >
-        <img class="canvas-image-img" :src="row.img.url" alt="" draggable="false" />
-      </div>
+      ></div>
       <button
         v-for="token in tokenStyle"
         :key="token.id"
@@ -1113,26 +1245,15 @@ function toggleFog() {
   transform-origin: center center;
   pointer-events: auto;
   cursor: grab;
-  z-index: 1;
 }
 
 .canvas-image-wrap.selected {
   outline: 2px solid #a78bfa;
   outline-offset: 2px;
-}
-
-.canvas-image-img {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: fill;
-  pointer-events: none;
-  user-select: none;
-  border-radius: 4px;
   box-shadow: 0 4px 14px rgba(15, 23, 42, 0.25);
 }
 
 .token-chip {
-  z-index: 2;
+  z-index: 50;
 }
 </style>

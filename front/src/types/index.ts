@@ -63,6 +63,8 @@ export type CanvasLayer = {
 
 export type CanvasImage = {
   id: string;
+  /** Слой, к которому относится картинка (порядок отрисовки как у штрихов слоя). */
+  layerId: string;
   url: string;
   x: number;
   y: number;
