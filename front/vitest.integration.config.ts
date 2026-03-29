@@ -4,6 +4,7 @@ import viteConfig from './vite.config';
 const testApiBase =
   process.env.VITE_TEST_API_URL ?? 'http://127.0.0.1:3000';
 
+/** Интеграция с поднятым API (см. `npm run test:integration`). */
 export default mergeConfig(
   viteConfig,
   defineConfig({
@@ -17,8 +18,7 @@ export default mergeConfig(
     test: {
       globals: true,
       environment: 'node',
-      include: ['src/**/*.spec.ts'],
-      exclude: ['**/node_modules/**', '**/dist/**', '**/*.integration.spec.ts'],
+      include: ['src/**/*.integration.spec.ts'],
       testTimeout: 15_000,
     },
   }),
