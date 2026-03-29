@@ -17,7 +17,7 @@ export default mergeConfig(
     test: {
       globals: true,
       environment: 'node',
-      include: ['src/**/*.integration.spec.ts'],
+      include: ['src/**/*.spec.ts'],
       testTimeout: 15_000,
     },
   }),

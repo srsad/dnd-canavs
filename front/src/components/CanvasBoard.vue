@@ -10,6 +10,7 @@ import type {
   Token,
 } from '../types';
 import { uploadRoomCanvasImage } from '../lib/api';
+import { randomUUID } from '../lib/randomUUID';
 import CanvasBoardContextMenu from './CanvasBoardContextMenu.vue';
 
 const props = withDefaults(
@@ -308,7 +309,7 @@ function addToken() {
   const cy = rect ? (rect.height / 2 - pan.value.y) / zoom.value : 120;
 
   const newToken: Token = {
-    id: window.crypto.randomUUID(),
+    id: randomUUID(),
     label: `T${localCanvas.value.tokens.length + 1}`,
     color: '#dc2626',
     x: cx + localCanvas.value.tokens.length * 20,
@@ -332,7 +333,7 @@ function startDrawing(event: PointerEvent) {
 
   const point = getRelativePoint(event);
   activeStroke = {
-    id: window.crypto.randomUUID(),
+    id: randomUUID(),
     color: brushColor.value,
     width: brushWidth.value,
     authorId: props.participantId,
@@ -400,7 +401,7 @@ function startFogErase(event: PointerEvent) {
 
   const point = getRelativePoint(event);
   activeFogStroke = {
-    id: window.crypto.randomUUID(),
+    id: randomUUID(),
     width: fogBrushWidth.value,
     authorId: props.participantId,
     points: [point],
@@ -661,7 +662,7 @@ async function onImageFileChange(event: Event) {
       '';
 
     const newImage: CanvasImage = {
-      id: window.crypto.randomUUID(),
+      id: randomUUID(),
       layerId,
       url: uploaded.publicUrl,
       x,
@@ -943,7 +944,7 @@ function cloneCanvas(value: RoomCanvas): RoomCanvas {
       ? layers
       : [
           {
-            id: window.crypto.randomUUID(),
+            id: randomUUID(),
             name: 'Base',
             visible: true,
             strokes: legacyStrokes,
@@ -1083,7 +1084,7 @@ function ensureActiveLayer() {
       ...localCanvas.value,
       layers: [
         {
-          id: window.crypto.randomUUID(),
+          id: randomUUID(),
           name: 'Base',
           visible: true,
           strokes: [],
@@ -1103,7 +1104,7 @@ function ensureActiveLayer() {
 function addLayer() {
   if (!canMutateCanvas.value) return;
   const newLayer: CanvasLayer = {
-    id: window.crypto.randomUUID(),
+    id: randomUUID(),
     name: `Layer ${localCanvas.value.layers.length + 1}`,
     visible: true,
     strokes: [],

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { randomUUID } from '../lib/randomUUID';
 import { useRoomStore } from '../stores/room';
 
 /**
@@ -17,7 +18,7 @@ describe('create room (integration)', () => {
     const slug = await store.createRoom({
       title: 'Vitest комната',
       guestName: 'GM',
-      guestKey: crypto.randomUUID(),
+      guestKey: randomUUID(),
     });
 
     expect(slug).toMatch(/^[a-z0-9-]+$/);

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { randomUUID } from '../lib/randomUUID';
 import { useAuthStore } from '../stores/auth';
 
 const emit = defineEmits<{
@@ -16,7 +17,7 @@ function submit() {
   emit('create', {
     title: title.value,
     guestName: isGuestFlow.value ? guestName.value : undefined,
-    guestKey: isGuestFlow.value ? window.crypto.randomUUID() : undefined,
+    guestKey: isGuestFlow.value ? randomUUID() : undefined,
   });
 }
 </script>
